@@ -4,6 +4,7 @@ RunPod Serverless Handler for LTX-Video
 # IMPORTANT: Set all temp/cache directories to /tmp BEFORE importing anything
 # This ensures everything uses /tmp (which has more space) instead of /root/.cache
 import os
+import shutil
 
 # HuggingFace cache
 os.environ.setdefault("HF_HOME", "/tmp/huggingface_cache")
@@ -14,14 +15,70 @@ os.environ.setdefault("TMPDIR", "/tmp")
 os.environ.setdefault("TMP", "/tmp")
 os.environ.setdefault("TEMP", "/tmp")
 
+# ImageIO/FFmpeg temp directory (critical for video processing)
+os.environ.setdefault("IMAGEIO_TEMP_DIR", "/tmp/imageio_temp")
+os.environ.setdefault("IMAGEIO_FFMPEG_EXE", "")  # Let imageio find it, but use our temp dir
+
 # Create directories if they don't exist
 os.makedirs("/tmp/huggingface_cache", exist_ok=True)
 os.makedirs("/tmp/outputs", exist_ok=True)
+os.makedirs("/tmp/imageio_temp", exist_ok=True)
 
 import runpod
 from pathlib import Path
 from ltx_video.inference import infer, InferenceConfig
 from typing import Dict, Any
+
+# Configure imageio to use /tmp for temp files (after import)
+try:
+    import imageio
+    # Set imageio temp directory
+    imageio.config.known_extensions['.mp4'] = 'ffmpeg'
+    # imageio will use TMPDIR which we set above
+except ImportError:
+    pass
+
+
+def get_disk_space(path: str) -> tuple:
+    """Get free disk space in GB for a given path."""
+    stat = shutil.disk_usage(path)
+    free_gb = stat.free / (1024 ** 3)
+    total_gb = stat.total / (1024 ** 3)
+    return free_gb, total_gb
+
+
+def cleanup_temp_files():
+    """Clean up temporary files to free space."""
+    temp_dirs = [
+        "/tmp/imageio_temp",
+        "/tmp/outputs",
+    ]
+    
+    freed_mb = 0
+    for temp_dir in temp_dirs:
+        if os.path.exists(temp_dir):
+            try:
+                for item in os.listdir(temp_dir):
+                    item_path = os.path.join(temp_dir, item)
+                    try:
+                        if os.path.isfile(item_path):
+                            size = os.path.getsize(item_path) / (1024 ** 2)  # MB
+                            os.remove(item_path)
+                            freed_mb += size
+                        elif os.path.isdir(item_path):
+                            size = sum(
+                                os.path.getsize(os.path.join(dirpath, filename))
+                                for dirpath, dirnames, filenames in os.walk(item_path)
+                                for filename in filenames
+                            ) / (1024 ** 2)  # MB
+                            shutil.rmtree(item_path)
+                            freed_mb += size
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    
+    return freed_mb
 
 
 def handler(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -43,6 +100,29 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     }
     """
     try:
+        # Check disk space before processing
+        tmp_free, tmp_total = get_disk_space("/tmp")
+        root_free, root_total = get_disk_space("/")
+        
+        # If /tmp has less than 2GB free, clean up old files
+        if tmp_free < 2.0:
+            freed_mb = cleanup_temp_files()
+            tmp_free, _ = get_disk_space("/tmp")
+        
+        # If still low on space, return error with diagnostics
+        if tmp_free < 1.0:
+            return {
+                "status": "error",
+                "error": f"Insufficient disk space. /tmp has {tmp_free:.2f}GB free (need at least 1GB). Root has {root_free:.2f}GB free.",
+                "error_type": "DiskSpaceError",
+                "diagnostics": {
+                    "tmp_free_gb": round(tmp_free, 2),
+                    "tmp_total_gb": round(tmp_total, 2),
+                    "root_free_gb": round(root_free, 2),
+                    "root_total_gb": round(root_total, 2)
+                }
+            }
+        
         input_data = event.get("input", {})
         
         # Validate required fields
