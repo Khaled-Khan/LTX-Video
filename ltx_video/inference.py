@@ -508,13 +508,7 @@ def infer(config: InferenceConfig):
         prompt_enhancer_llm_model_name_or_path=prompt_enhancer_llm_model_name_or_path,
     )
 
-    # Check if multi-scale and extract parameters before pipeline call
-    is_multi_scale = pipeline_config.get("pipeline_type", None) == "multi-scale"
-    downscale_factor = None
-    first_pass = None
-    second_pass = None
-    
-    if is_multi_scale:
+    if pipeline_config.get("pipeline_type", None) == "multi-scale":
         if not spatial_upscaler_model_path:
             raise ValueError(
                 "spatial upscaler model path is missing from pipeline config file and is required for multi-scale rendering"
@@ -523,21 +517,6 @@ def infer(config: InferenceConfig):
             spatial_upscaler_model_path, pipeline.device
         )
         pipeline = LTXMultiScalePipeline(pipeline, latent_upsampler=latent_upsampler)
-        # Extract multi-scale parameters (must be dicts, not strings)
-        downscale_factor = pipeline_config.pop("downscale_factor", 0.6666666)
-        first_pass_dict = pipeline_config.pop("first_pass", {})
-        second_pass_dict = pipeline_config.pop("second_pass", {})
-        # Ensure they are dicts
-        if isinstance(first_pass_dict, dict):
-            first_pass = first_pass_dict
-        else:
-            first_pass = {}
-        if isinstance(second_pass_dict, dict):
-            second_pass = second_pass_dict
-        else:
-            second_pass = {}
-        # Remove pipeline_type from config (not a pipeline parameter)
-        pipeline_config.pop("pipeline_type", None)
 
     media_item = None
     if config.input_media_path:
@@ -577,20 +556,6 @@ def infer(config: InferenceConfig):
     else:
         raise ValueError(f"Invalid spatiotemporal guidance mode: {stg_mode}")
 
-    # Remove non-pipeline parameters from config before unpacking
-    # These are used for pipeline creation, not for pipeline.__call__()
-    pipeline_config.pop("checkpoint_path", None)
-    pipeline_config.pop("spatial_upscaler_model_path", None)
-    pipeline_config.pop("text_encoder_model_name_or_path", None)
-    pipeline_config.pop("precision", None)
-    pipeline_config.pop("sampler", None)
-    pipeline_config.pop("prompt_enhancement_words_threshold", None)
-    pipeline_config.pop("prompt_enhancer_image_caption_model_name_or_path", None)
-    pipeline_config.pop("prompt_enhancer_llm_model_name_or_path", None)
-    pipeline_config.pop("decode_timestep", None)
-    pipeline_config.pop("decode_noise_scale", None)
-    pipeline_config.pop("stochastic_sampling", None)
-
     # Prepare input for the pipeline
     sample = {
         "prompt": config.prompt,
@@ -601,54 +566,27 @@ def infer(config: InferenceConfig):
 
     generator = torch.Generator(device=device).manual_seed(config.seed)
 
-    # Call pipeline with appropriate parameters
-    if is_multi_scale:
-        images = pipeline(
-            downscale_factor=downscale_factor,
-            first_pass=first_pass,
-            second_pass=second_pass,
-            **pipeline_config,
-            skip_layer_strategy=skip_layer_strategy,
-            generator=generator,
-            output_type="pt",
-            callback_on_step_end=None,
-            height=height_padded,
-            width=width_padded,
-            num_frames=num_frames_padded,
-            frame_rate=config.frame_rate,
-            **sample,
-            media_items=media_item,
-            conditioning_items=conditioning_items,
-            is_video=True,
-            vae_per_channel_normalize=True,
-            image_cond_noise_scale=config.image_cond_noise_scale,
-            mixed_precision=(precision == "mixed_precision"),
-            offload_to_cpu=offload_to_cpu,
-            device=device,
-            enhance_prompt=enhance_prompt,
-        ).images
-    else:
-        images = pipeline(
-            **pipeline_config,
-            skip_layer_strategy=skip_layer_strategy,
-            generator=generator,
-            output_type="pt",
-            callback_on_step_end=None,
-            height=height_padded,
-            width=width_padded,
-            num_frames=num_frames_padded,
-            frame_rate=config.frame_rate,
-            **sample,
-            media_items=media_item,
-            conditioning_items=conditioning_items,
-            is_video=True,
-            vae_per_channel_normalize=True,
-            image_cond_noise_scale=config.image_cond_noise_scale,
-            mixed_precision=(precision == "mixed_precision"),
-            offload_to_cpu=offload_to_cpu,
-            device=device,
-            enhance_prompt=enhance_prompt,
-        ).images
+    images = pipeline(
+        **pipeline_config,
+        skip_layer_strategy=skip_layer_strategy,
+        generator=generator,
+        output_type="pt",
+        callback_on_step_end=None,
+        height=height_padded,
+        width=width_padded,
+        num_frames=num_frames_padded,
+        frame_rate=config.frame_rate,
+        **sample,
+        media_items=media_item,
+        conditioning_items=conditioning_items,
+        is_video=True,
+        vae_per_channel_normalize=True,
+        image_cond_noise_scale=config.image_cond_noise_scale,
+        mixed_precision=(precision == "mixed_precision"),
+        offload_to_cpu=offload_to_cpu,
+        device=device,
+        enhance_prompt=enhance_prompt,
+    ).images
 
     # Crop the padded images to the desired resolution and number of frames
     (pad_left, pad_right, pad_top, pad_bottom) = padding
