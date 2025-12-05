@@ -82,7 +82,7 @@ def cleanup_temp_files():
 
 
 def cleanup_huggingface_cache():
-    """Aggressively clean up HuggingFace cache to free space."""
+    """Aggressively clean up HuggingFace cache to free space, but preserve text encoder."""
     cache_dir = Path("/tmp/huggingface_cache")
     hub_dir = cache_dir / "hub"
     
@@ -91,11 +91,18 @@ def cleanup_huggingface_cache():
     
     freed_mb = 0.0
     
-    # Remove all cached models (they'll be re-downloaded if needed)
+    # Preserve text encoder (PixArt) - it's large and takes time to download
+    text_encoder_pattern = "PixArt-alpha--PixArt-XL-2-1024-MS"
+    
+    # Remove cached models (but preserve text encoder)
     try:
         for item in hub_dir.iterdir():
             try:
                 if item.is_dir():
+                    # Skip text encoder - preserve it
+                    if text_encoder_pattern in str(item):
+                        continue
+                    
                     # Calculate size
                     size = sum(
                         os.path.getsize(os.path.join(dirpath, filename))
@@ -131,33 +138,6 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     }
     """
     try:
-        # Check disk space before processing
-        tmp_free, tmp_total = get_disk_space("/tmp")
-        root_free, root_total = get_disk_space("/")
-        
-        # Aggressively clean up if space is low
-        if tmp_free < 7.0:  # Need at least 7GB for model download
-            # Clean up temp files
-            freed_mb = cleanup_temp_files()
-            # Clean up HuggingFace cache (models will be re-downloaded)
-            freed_mb += cleanup_huggingface_cache()
-            tmp_free, _ = get_disk_space("/tmp")
-        
-        # If still low on space, return error with diagnostics
-        if tmp_free < 7.0:
-            return {
-                "status": "error",
-                "error": f"Insufficient disk space. /tmp has {tmp_free:.2f}GB free (need at least 7GB for model download). Root has {root_free:.2f}GB free. Please use a smaller model (ltxv-2b-0.9.8-distilled.yaml) or increase instance storage.",
-                "error_type": "DiskSpaceError",
-                "diagnostics": {
-                    "tmp_free_gb": round(tmp_free, 2),
-                    "tmp_total_gb": round(tmp_total, 2),
-                    "root_free_gb": round(root_free, 2),
-                    "root_total_gb": round(root_total, 2),
-                    "suggestion": "Use pipeline_config: 'configs/ltxv-2b-0.9.8-distilled.yaml' for a smaller model"
-                }
-            }
-        
         input_data = event.get("input", {})
         
         # Validate required fields
@@ -170,12 +150,59 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         prompt = input_data["prompt"]
         conditioning_media_paths = input_data.get("conditioning_media_paths")
         conditioning_start_frames = input_data.get("conditioning_start_frames", [0] if conditioning_media_paths else None)
-        height = input_data.get("height", 512)
-        width = input_data.get("width", 512)
-        num_frames = input_data.get("num_frames", 121)
+        # Use smaller defaults to avoid GPU OOM (22GB GPU can't handle 512x512x121)
+        height = input_data.get("height", 256)
+        width = input_data.get("width", 256)
+        num_frames = input_data.get("num_frames", 25)  # Reduced from 121
         seed = input_data.get("seed", 42)
+        offload_to_cpu = input_data.get("offload_to_cpu", False)
         # Default to 2B model (smaller, requires less disk space)
         pipeline_config = input_data.get("pipeline_config", "configs/ltxv-2b-0.9.8-distilled.yaml")
+        
+        # Check disk space before processing
+        tmp_free, tmp_total = get_disk_space("/tmp")
+        root_free, root_total = get_disk_space("/")
+        
+        # Determine required space based on model
+        # Note: Text encoder (PixArt) is ~19GB, but it's cached after first download
+        # So we need space for: main model + text encoder (if not cached) + processing overhead
+        is_2b_model = "2b" in pipeline_config.lower()
+        
+        # Check if text encoder is already cached
+        text_encoder_cache = Path("/tmp/huggingface_cache/hub/models--PixArt-alpha--PixArt-XL-2-1024-MS")
+        text_encoder_cached = text_encoder_cache.exists() and any(text_encoder_cache.rglob("*.safetensors"))
+        
+        if text_encoder_cached:
+            # Text encoder already cached, only need space for main model
+            required_space = 3.0 if is_2b_model else 7.0
+        else:
+            # Need to download text encoder (~19GB) + main model
+            required_space = 22.0 if is_2b_model else 26.0  # 19GB text encoder + model + overhead
+        
+        # Aggressively clean up if space is low
+        if tmp_free < required_space:
+            # Clean up temp files
+            freed_mb = cleanup_temp_files()
+            # Clean up HuggingFace cache (models will be re-downloaded)
+            freed_mb += cleanup_huggingface_cache()
+            tmp_free, _ = get_disk_space("/tmp")
+        
+        # If still low on space, return error with diagnostics
+        if tmp_free < required_space:
+            return {
+                "status": "error",
+                "error": f"Insufficient disk space. /tmp has {tmp_free:.2f}GB free (need at least {required_space}GB for {('2B' if is_2b_model else '13B')} model). Root has {root_free:.2f}GB free.",
+                "error_type": "DiskSpaceError",
+                "diagnostics": {
+                    "tmp_free_gb": round(tmp_free, 2),
+                    "tmp_total_gb": round(tmp_total, 2),
+                    "root_free_gb": round(root_free, 2),
+                    "root_total_gb": round(root_total, 2),
+                    "required_space_gb": required_space,
+                    "model_type": "2B" if is_2b_model else "13B",
+                    "suggestion": "Use pipeline_config: 'configs/ltxv-2b-0.9.8-distilled.yaml' for a smaller model"
+                }
+            }
         
         # Create output directory
         output_dir = Path("/tmp/outputs")
@@ -192,7 +219,8 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             num_frames=num_frames,
             seed=seed,
             pipeline_config=pipeline_config,
-            output_path=output_path
+            output_path=output_path,
+            offload_to_cpu=offload_to_cpu
         )
         
         # Run inference
