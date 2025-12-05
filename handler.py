@@ -81,6 +81,37 @@ def cleanup_temp_files():
     return freed_mb
 
 
+def cleanup_huggingface_cache():
+    """Aggressively clean up HuggingFace cache to free space."""
+    cache_dir = Path("/tmp/huggingface_cache")
+    hub_dir = cache_dir / "hub"
+    
+    if not hub_dir.exists():
+        return 0.0
+    
+    freed_mb = 0.0
+    
+    # Remove all cached models (they'll be re-downloaded if needed)
+    try:
+        for item in hub_dir.iterdir():
+            try:
+                if item.is_dir():
+                    # Calculate size
+                    size = sum(
+                        os.path.getsize(os.path.join(dirpath, filename))
+                        for dirpath, dirnames, filenames in os.walk(item)
+                        for filename in filenames
+                    ) / (1024 ** 2)  # MB
+                    shutil.rmtree(item)
+                    freed_mb += size
+            except Exception:
+                continue
+    except Exception:
+        pass
+    
+    return freed_mb
+
+
 def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     Serverless handler for LTX-Video inference
@@ -104,22 +135,26 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         tmp_free, tmp_total = get_disk_space("/tmp")
         root_free, root_total = get_disk_space("/")
         
-        # If /tmp has less than 2GB free, clean up old files
-        if tmp_free < 2.0:
+        # Aggressively clean up if space is low
+        if tmp_free < 7.0:  # Need at least 7GB for model download
+            # Clean up temp files
             freed_mb = cleanup_temp_files()
+            # Clean up HuggingFace cache (models will be re-downloaded)
+            freed_mb += cleanup_huggingface_cache()
             tmp_free, _ = get_disk_space("/tmp")
         
         # If still low on space, return error with diagnostics
-        if tmp_free < 1.0:
+        if tmp_free < 7.0:
             return {
                 "status": "error",
-                "error": f"Insufficient disk space. /tmp has {tmp_free:.2f}GB free (need at least 1GB). Root has {root_free:.2f}GB free.",
+                "error": f"Insufficient disk space. /tmp has {tmp_free:.2f}GB free (need at least 7GB for model download). Root has {root_free:.2f}GB free. Please use a smaller model (ltxv-2b-0.9.8-distilled.yaml) or increase instance storage.",
                 "error_type": "DiskSpaceError",
                 "diagnostics": {
                     "tmp_free_gb": round(tmp_free, 2),
                     "tmp_total_gb": round(tmp_total, 2),
                     "root_free_gb": round(root_free, 2),
-                    "root_total_gb": round(root_total, 2)
+                    "root_total_gb": round(root_total, 2),
+                    "suggestion": "Use pipeline_config: 'configs/ltxv-2b-0.9.8-distilled.yaml' for a smaller model"
                 }
             }
         
@@ -139,6 +174,7 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         width = input_data.get("width", 512)
         num_frames = input_data.get("num_frames", 121)
         seed = input_data.get("seed", 42)
+        # Default to 2B model (smaller, requires less disk space)
         pipeline_config = input_data.get("pipeline_config", "configs/ltxv-2b-0.9.8-distilled.yaml")
         
         # Create output directory
