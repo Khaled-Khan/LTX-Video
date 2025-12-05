@@ -525,13 +525,19 @@ def infer(config: InferenceConfig):
         pipeline = LTXMultiScalePipeline(pipeline, latent_upsampler=latent_upsampler)
         # Extract multi-scale parameters (must be dicts)
         downscale_factor = pipeline_config.pop("downscale_factor", 0.6666666)
-        first_pass = pipeline_config.pop("first_pass", {})
-        second_pass = pipeline_config.pop("second_pass", {})
-        # Ensure they are dicts, not strings
-        if not isinstance(first_pass, dict):
-            first_pass = {}
-        if not isinstance(second_pass, dict):
-            second_pass = {}
+        first_pass_raw = pipeline_config.pop("first_pass", None)
+        second_pass_raw = pipeline_config.pop("second_pass", None)
+        
+        # Ensure they are dicts, not strings or None
+        if first_pass_raw is None or not isinstance(first_pass_raw, dict):
+            raise ValueError(f"first_pass must be a dictionary, got {type(first_pass_raw)}: {first_pass_raw}")
+        if second_pass_raw is None or not isinstance(second_pass_raw, dict):
+            raise ValueError(f"second_pass must be a dictionary, got {type(second_pass_raw)}: {second_pass_raw}")
+        
+        # Create clean copies to avoid any reference issues
+        first_pass = dict(first_pass_raw)
+        second_pass = dict(second_pass_raw)
+        
         # Remove pipeline_type from config (not a pipeline parameter)
         pipeline_config.pop("pipeline_type", None)
 
@@ -575,6 +581,7 @@ def infer(config: InferenceConfig):
 
     # Remove non-pipeline parameters from config before unpacking
     # These are used for pipeline creation, not for pipeline.__call__()
+    # CRITICAL: Also remove first_pass and second_pass if they somehow still exist
     pipeline_config.pop("checkpoint_path", None)
     pipeline_config.pop("spatial_upscaler_model_path", None)
     pipeline_config.pop("text_encoder_model_name_or_path", None)
@@ -586,6 +593,10 @@ def infer(config: InferenceConfig):
     pipeline_config.pop("decode_timestep", None)
     pipeline_config.pop("decode_noise_scale", None)
     pipeline_config.pop("stochastic_sampling", None)
+    pipeline_config.pop("first_pass", None)  # Ensure removed even if not multi-scale
+    pipeline_config.pop("second_pass", None)  # Ensure removed even if not multi-scale
+    pipeline_config.pop("downscale_factor", None)  # Ensure removed even if not multi-scale
+    pipeline_config.pop("pipeline_type", None)  # Ensure removed
 
     # Prepare input for the pipeline
     sample = {
@@ -599,6 +610,11 @@ def infer(config: InferenceConfig):
 
     # Call pipeline with appropriate parameters
     if is_multi_scale:
+        # Final safety check: ensure first_pass and second_pass are not in pipeline_config
+        pipeline_config.pop("first_pass", None)
+        pipeline_config.pop("second_pass", None)
+        pipeline_config.pop("downscale_factor", None)
+        
         images = pipeline(
             downscale_factor=downscale_factor,
             first_pass=first_pass,
