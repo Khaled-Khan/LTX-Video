@@ -24,6 +24,17 @@ COPY . .
 # Set Python path
 ENV PYTHONPATH=/app:$PYTHONPATH
 
+# Set all temp/cache directories to /tmp to avoid disk space issues
+# /tmp typically has more space on RunPod instances
+ENV HF_HOME=/tmp/huggingface_cache
+ENV HUGGINGFACE_HUB_CACHE=/tmp/huggingface_cache
+ENV TMPDIR=/tmp
+ENV TMP=/tmp
+ENV TEMP=/tmp
+
+# Create directories
+RUN mkdir -p /tmp/huggingface_cache /tmp/outputs
+
 # Expose port (RunPod will handle this)
 EXPOSE 8000
 

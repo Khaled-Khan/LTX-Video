@@ -1,8 +1,24 @@
 """
 RunPod Serverless Handler for LTX-Video
 """
-import runpod
+# IMPORTANT: Set all temp/cache directories to /tmp BEFORE importing anything
+# This ensures everything uses /tmp (which has more space) instead of /root/.cache
 import os
+
+# HuggingFace cache
+os.environ.setdefault("HF_HOME", "/tmp/huggingface_cache")
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/tmp/huggingface_cache")
+
+# Python temp files
+os.environ.setdefault("TMPDIR", "/tmp")
+os.environ.setdefault("TMP", "/tmp")
+os.environ.setdefault("TEMP", "/tmp")
+
+# Create directories if they don't exist
+os.makedirs("/tmp/huggingface_cache", exist_ok=True)
+os.makedirs("/tmp/outputs", exist_ok=True)
+
+import runpod
 from pathlib import Path
 from ltx_video.inference import infer, InferenceConfig
 from typing import Dict, Any
