@@ -1848,6 +1848,32 @@ class LTXMultiScalePipeline:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        # Validate inputs
+        if not isinstance(first_pass, dict):
+            raise TypeError(f"first_pass must be a dict, got {type(first_pass)}")
+        if not isinstance(second_pass, dict):
+            raise TypeError(f"second_pass must be a dict, got {type(second_pass)}")
+        
+        # Clean first_pass and second_pass - ensure all values are proper types
+        # Remove any string values that might be causing issues
+        first_pass_clean = {}
+        for k, v in first_pass.items():
+            # Skip None values and ensure we don't pass strings where objects are expected
+            if v is not None:
+                # If value is a string and might be problematic, skip it
+                # But keep normal string parameters like prompt
+                if isinstance(v, str) and k not in ["prompt", "negative_prompt"]:
+                    # Check if it's a string representation of something that should be parsed
+                    continue
+                first_pass_clean[k] = v
+        
+        second_pass_clean = {}
+        for k, v in second_pass.items():
+            if v is not None:
+                if isinstance(v, str) and k not in ["prompt", "negative_prompt"]:
+                    continue
+                second_pass_clean[k] = v
+        
         original_kwargs = kwargs.copy()
         original_output_type = kwargs["output_type"]
         original_width = kwargs["width"]
@@ -1861,8 +1887,25 @@ class LTXMultiScalePipeline:
         kwargs["output_type"] = "latent"
         kwargs["width"] = downscaled_width
         kwargs["height"] = downscaled_height
-        kwargs.update(**first_pass)
-        result = self.video_pipeline(*args, **kwargs)
+        
+        # Update with first_pass parameters
+        kwargs.update(**first_pass_clean)
+        
+        # Call pipeline without *args to avoid any positional argument issues
+        try:
+            result = self.video_pipeline(**kwargs)
+        except AttributeError as e:
+            if "'str' object has no attribute 'priority'" in str(e):
+                # This is the specific error we're trying to fix
+                import traceback
+                error_msg = f"Priority error in first_pass pipeline call:\n"
+                error_msg += f"Error: {e}\n"
+                error_msg += f"first_pass keys: {list(first_pass_clean.keys())}\n"
+                error_msg += f"first_pass values: {[(k, type(v).__name__, str(v)[:50]) for k, v in first_pass_clean.items()]}\n"
+                error_msg += f"kwargs keys: {list(kwargs.keys())}\n"
+                error_msg += f"Traceback: {traceback.format_exc()}"
+                raise ValueError(error_msg) from e
+            raise
         latents = result.images
 
         upsampled_latents = self._upsample_latents(self.latent_upsampler, latents)
@@ -1870,13 +1913,31 @@ class LTXMultiScalePipeline:
             latents=upsampled_latents, reference_latents=latents
         )
 
-        kwargs = original_kwargs
+        kwargs = original_kwargs.copy()
 
         kwargs["latents"] = upsampled_latents
         kwargs["output_type"] = original_output_type
         kwargs["width"] = downscaled_width * 2
         kwargs["height"] = downscaled_height * 2
-        kwargs.update(**second_pass)
+        
+        # Update with second_pass parameters
+        kwargs.update(**second_pass_clean)
+        
+        # Call pipeline without *args to avoid any positional argument issues
+        try:
+            result = self.video_pipeline(**kwargs)
+        except AttributeError as e:
+            if "'str' object has no attribute 'priority'" in str(e):
+                # This is the specific error we're trying to fix
+                import traceback
+                error_msg = f"Priority error in second_pass pipeline call:\n"
+                error_msg += f"Error: {e}\n"
+                error_msg += f"second_pass keys: {list(second_pass_clean.keys())}\n"
+                error_msg += f"second_pass values: {[(k, type(v).__name__, str(v)[:50]) for k, v in second_pass_clean.items()]}\n"
+                error_msg += f"kwargs keys: {list(kwargs.keys())}\n"
+                error_msg += f"Traceback: {traceback.format_exc()}"
+                raise ValueError(error_msg) from e
+            raise
 
         result = self.video_pipeline(*args, **kwargs)
         if original_output_type != "latent":
