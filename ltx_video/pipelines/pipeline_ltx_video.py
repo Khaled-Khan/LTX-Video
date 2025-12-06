@@ -1854,24 +1854,51 @@ class LTXMultiScalePipeline:
         if not isinstance(second_pass, dict):
             raise TypeError(f"second_pass must be a dict, got {type(second_pass)}")
         
-        # Clean first_pass and second_pass - ensure all values are proper types
-        # Remove any string values that might be causing issues
+        # Clean first_pass and second_pass - only include valid pipeline parameters
+        # Valid parameters from LTXVideoPipeline.__call__ signature
+        valid_params = {
+            "timesteps", "guidance_scale", "cfg_star_rescale", "skip_block_list", 
+            "stg_scale", "rescaling_scale", "guidance_timesteps", "num_inference_steps",
+            "skip_initial_inference_steps", "skip_final_inference_steps", "eta",
+            "num_images_per_prompt", "latents", "prompt_embeds", "prompt_attention_mask",
+            "negative_prompt_embeds", "negative_prompt_attention_mask", "decode_timestep",
+            "decode_noise_scale", "tone_map_compression_ratio"
+        }
+        
         first_pass_clean = {}
         for k, v in first_pass.items():
-            # Skip None values and ensure we don't pass strings where objects are expected
-            if v is not None:
-                # If value is a string and might be problematic, skip it
-                # But keep normal string parameters like prompt
-                if isinstance(v, str) and k not in ["prompt", "negative_prompt"]:
-                    # Check if it's a string representation of something that should be parsed
-                    continue
+            # Only include valid parameters and ensure they're not strings (except for specific cases)
+            if k in valid_params and v is not None:
+                # Convert strings to appropriate types if needed
+                if isinstance(v, str):
+                    # Try to parse string values
+                    if k in ["cfg_star_rescale", "stochastic_sampling"]:
+                        v = v.lower() in ["true", "1", "yes"]
+                    elif k in ["num_inference_steps", "skip_initial_inference_steps", 
+                               "skip_final_inference_steps", "num_images_per_prompt"]:
+                        try:
+                            v = int(v)
+                        except (ValueError, TypeError):
+                            continue
+                    else:
+                        # Skip string values for other parameters
+                        continue
                 first_pass_clean[k] = v
         
         second_pass_clean = {}
         for k, v in second_pass.items():
-            if v is not None:
-                if isinstance(v, str) and k not in ["prompt", "negative_prompt"]:
-                    continue
+            if k in valid_params and v is not None:
+                if isinstance(v, str):
+                    if k in ["cfg_star_rescale", "stochastic_sampling"]:
+                        v = v.lower() in ["true", "1", "yes"]
+                    elif k in ["num_inference_steps", "skip_initial_inference_steps", 
+                               "skip_final_inference_steps", "num_images_per_prompt"]:
+                        try:
+                            v = int(v)
+                        except (ValueError, TypeError):
+                            continue
+                    else:
+                        continue
                 second_pass_clean[k] = v
         
         original_kwargs = kwargs.copy()
@@ -1888,21 +1915,42 @@ class LTXMultiScalePipeline:
         kwargs["width"] = downscaled_width
         kwargs["height"] = downscaled_height
         
-        # Update with first_pass parameters
-        kwargs.update(**first_pass_clean)
+        # CRITICAL: Ensure skip_layer_strategy is preserved if it exists in kwargs
+        # Don't let first_pass overwrite it
+        skip_layer_strategy_backup = kwargs.get("skip_layer_strategy")
+        
+        # Update with first_pass parameters, but exclude skip_layer_strategy if it's a string
+        for k, v in first_pass_clean.items():
+            # Skip skip_layer_strategy if it's in kwargs already (preserve the enum, not a string)
+            if k == "skip_layer_strategy" and skip_layer_strategy_backup is not None:
+                continue
+            # Skip any parameter that might conflict with kwargs
+            if k in kwargs and isinstance(kwargs[k], type(v)) == False:
+                # If types don't match, preserve the original
+                if not isinstance(v, type(kwargs[k])):
+                    continue
+            kwargs[k] = v
+        
+        # Restore skip_layer_strategy if it was backed up
+        if skip_layer_strategy_backup is not None:
+            kwargs["skip_layer_strategy"] = skip_layer_strategy_backup
         
         # Call pipeline without *args to avoid any positional argument issues
         try:
             result = self.video_pipeline(**kwargs)
-        except AttributeError as e:
-            if "'str' object has no attribute 'priority'" in str(e):
+        except (AttributeError, TypeError) as e:
+            error_str = str(e)
+            if "priority" in error_str.lower() or "'str' object" in error_str:
                 # This is the specific error we're trying to fix
                 import traceback
                 error_msg = f"Priority error in first_pass pipeline call:\n"
                 error_msg += f"Error: {e}\n"
+                error_msg += f"Error type: {type(e).__name__}\n"
                 error_msg += f"first_pass keys: {list(first_pass_clean.keys())}\n"
-                error_msg += f"first_pass values: {[(k, type(v).__name__, str(v)[:50]) for k, v in first_pass_clean.items()]}\n"
-                error_msg += f"kwargs keys: {list(kwargs.keys())}\n"
+                error_msg += f"first_pass values: {[(k, type(v).__name__, str(v)[:50] if not isinstance(v, (list, dict)) else str(type(v)))] for k, v in first_pass_clean.items()]}\n"
+                error_msg += f"kwargs keys before update: {list(original_kwargs.keys())}\n"
+                error_msg += f"kwargs keys after update: {list(kwargs.keys())}\n"
+                error_msg += f"skip_layer_strategy type: {type(kwargs.get('skip_layer_strategy'))}\n"
                 error_msg += f"Traceback: {traceback.format_exc()}"
                 raise ValueError(error_msg) from e
             raise
@@ -1920,21 +1968,40 @@ class LTXMultiScalePipeline:
         kwargs["width"] = downscaled_width * 2
         kwargs["height"] = downscaled_height * 2
         
-        # Update with second_pass parameters
-        kwargs.update(**second_pass_clean)
+        # CRITICAL: Ensure skip_layer_strategy is preserved if it exists in kwargs
+        skip_layer_strategy_backup = kwargs.get("skip_layer_strategy")
+        
+        # Update with second_pass parameters, but exclude skip_layer_strategy if it's a string
+        for k, v in second_pass_clean.items():
+            # Skip skip_layer_strategy if it's in kwargs already (preserve the enum, not a string)
+            if k == "skip_layer_strategy" and skip_layer_strategy_backup is not None:
+                continue
+            # Skip any parameter that might conflict with kwargs
+            if k in kwargs and isinstance(kwargs[k], type(v)) == False:
+                # If types don't match, preserve the original
+                if not isinstance(v, type(kwargs[k])):
+                    continue
+            kwargs[k] = v
+        
+        # Restore skip_layer_strategy if it was backed up
+        if skip_layer_strategy_backup is not None:
+            kwargs["skip_layer_strategy"] = skip_layer_strategy_backup
         
         # Call pipeline without *args to avoid any positional argument issues
         try:
             result = self.video_pipeline(**kwargs)
-        except AttributeError as e:
-            if "'str' object has no attribute 'priority'" in str(e):
+        except (AttributeError, TypeError) as e:
+            error_str = str(e)
+            if "priority" in error_str.lower() or "'str' object" in error_str:
                 # This is the specific error we're trying to fix
                 import traceback
                 error_msg = f"Priority error in second_pass pipeline call:\n"
                 error_msg += f"Error: {e}\n"
+                error_msg += f"Error type: {type(e).__name__}\n"
                 error_msg += f"second_pass keys: {list(second_pass_clean.keys())}\n"
-                error_msg += f"second_pass values: {[(k, type(v).__name__, str(v)[:50]) for k, v in second_pass_clean.items()]}\n"
+                error_msg += f"second_pass values: {[(k, type(v).__name__, str(v)[:50] if not isinstance(v, (list, dict)) else str(type(v)))] for k, v in second_pass_clean.items()]}\n"
                 error_msg += f"kwargs keys: {list(kwargs.keys())}\n"
+                error_msg += f"skip_layer_strategy type: {type(kwargs.get('skip_layer_strategy'))}\n"
                 error_msg += f"Traceback: {traceback.format_exc()}"
                 raise ValueError(error_msg) from e
             raise
