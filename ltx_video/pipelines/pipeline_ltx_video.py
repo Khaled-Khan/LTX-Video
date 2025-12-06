@@ -1947,7 +1947,8 @@ class LTXMultiScalePipeline:
                 error_msg += f"Error: {e}\n"
                 error_msg += f"Error type: {type(e).__name__}\n"
                 error_msg += f"first_pass keys: {list(first_pass_clean.keys())}\n"
-                error_msg += f"first_pass values: {[(k, type(v).__name__, str(v)[:50] if not isinstance(v, (list, dict)) else str(type(v)))] for k, v in first_pass_clean.items()]}\n"
+                first_pass_values = [(k, type(v).__name__, str(v)[:50] if not isinstance(v, (list, dict)) else str(type(v))) for k, v in first_pass_clean.items()]
+                error_msg += f"first_pass values: {first_pass_values}\n"
                 error_msg += f"kwargs keys before update: {list(original_kwargs.keys())}\n"
                 error_msg += f"kwargs keys after update: {list(kwargs.keys())}\n"
                 error_msg += f"skip_layer_strategy type: {type(kwargs.get('skip_layer_strategy'))}\n"
@@ -1999,7 +2000,8 @@ class LTXMultiScalePipeline:
                 error_msg += f"Error: {e}\n"
                 error_msg += f"Error type: {type(e).__name__}\n"
                 error_msg += f"second_pass keys: {list(second_pass_clean.keys())}\n"
-                error_msg += f"second_pass values: {[(k, type(v).__name__, str(v)[:50] if not isinstance(v, (list, dict)) else str(type(v)))] for k, v in second_pass_clean.items()]}\n"
+                second_pass_values = [(k, type(v).__name__, str(v)[:50] if not isinstance(v, (list, dict)) else str(type(v))) for k, v in second_pass_clean.items()]
+                error_msg += f"second_pass values: {second_pass_values}\n"
                 error_msg += f"kwargs keys: {list(kwargs.keys())}\n"
                 error_msg += f"skip_layer_strategy type: {type(kwargs.get('skip_layer_strategy'))}\n"
                 error_msg += f"Traceback: {traceback.format_exc()}"
