@@ -610,16 +610,13 @@ def infer(config: InferenceConfig):
 
     # Call pipeline with appropriate parameters
     if is_multi_scale:
-        # Final safety check: ensure first_pass and second_pass are not in pipeline_config
-        pipeline_config.pop("first_pass", None)
-        pipeline_config.pop("second_pass", None)
-        pipeline_config.pop("downscale_factor", None)
-        
+        # For multi-scale pipelines, first_pass and second_pass contain the parameters for each pass
+        # We should NOT pass **pipeline_config as it may contain invalid parameters
+        # Only pass the explicitly required parameters
         images = pipeline(
             downscale_factor=downscale_factor,
             first_pass=first_pass,
             second_pass=second_pass,
-            **pipeline_config,
             skip_layer_strategy=skip_layer_strategy,
             generator=generator,
             output_type="pt",
