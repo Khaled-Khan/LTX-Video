@@ -36,7 +36,7 @@ from ltx_video.models.autoencoders.vae_encode import (
 from ltx_video.models.transformers.symmetric_patchifier import Patchifier
 from ltx_video.models.transformers.transformer3d import Transformer3DModel
 from ltx_video.schedulers.rf import TimestepShifter
-from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
+from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy, ensure_enum
 from ltx_video.utils.prompt_enhance_utils import generate_cinematic_prompt
 from ltx_video.models.autoencoders.latent_upsampler import LatentUpsampler
 from ltx_video.models.autoencoders.vae_encode import (
@@ -881,26 +881,8 @@ class LTXVideoPipeline(DiffusionPipeline):
                 If `return_dict` is `True`, [`~pipelines.ImagePipelineOutput`] is returned, otherwise a `tuple` is
                 returned where the first element is a list with the generated images
         """
-        # CRITICAL: Validate skip_layer_strategy is an enum, not a string
-        # This prevents the 'str' object has no attribute 'priority' error
-        if skip_layer_strategy is not None:
-            if isinstance(skip_layer_strategy, str):
-                # Convert string to enum
-                str_val = skip_layer_strategy.lower()
-                if str_val in ["attentionskip", "attention_skip", "stg_as"]:
-                    skip_layer_strategy = SkipLayerStrategy.AttentionSkip
-                elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
-                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
-                elif str_val in ["residual", "stg_r"]:
-                    skip_layer_strategy = SkipLayerStrategy.Residual
-                elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
-                    skip_layer_strategy = SkipLayerStrategy.TransformerBlock
-                else:
-                    # Default fallback
-                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
-            elif not isinstance(skip_layer_strategy, SkipLayerStrategy):
-                # If it's not a string and not an enum, use default
-                skip_layer_strategy = SkipLayerStrategy.AttentionValues
+        # CRITICAL: Ensure skip_layer_strategy is enum, not string - prevents priority error
+        skip_layer_strategy = ensure_enum(skip_layer_strategy)
         
         if "mask_feature" in kwargs:
             deprecation_message = "The use of `mask_feature` is deprecated. It is no longer used in any computation and that doesn't affect the end results. It will be removed in a future version."
@@ -1224,24 +1206,8 @@ class LTXVideoPipeline(DiffusionPipeline):
 
                 # predict noise model_output
                 with context_manager:
-                    # CRITICAL: Validate skip_layer_strategy before passing to transformer
-                    # This prevents 'str' object has no attribute 'priority' error
-                    transformer_skip_layer_strategy = skip_layer_strategy
-                    if transformer_skip_layer_strategy is not None:
-                        if isinstance(transformer_skip_layer_strategy, str):
-                            str_val = transformer_skip_layer_strategy.lower()
-                            if str_val in ["attentionskip", "attention_skip", "stg_as"]:
-                                transformer_skip_layer_strategy = SkipLayerStrategy.AttentionSkip
-                            elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
-                                transformer_skip_layer_strategy = SkipLayerStrategy.AttentionValues
-                            elif str_val in ["residual", "stg_r"]:
-                                transformer_skip_layer_strategy = SkipLayerStrategy.Residual
-                            elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
-                                transformer_skip_layer_strategy = SkipLayerStrategy.TransformerBlock
-                            else:
-                                transformer_skip_layer_strategy = SkipLayerStrategy.AttentionValues
-                        elif not isinstance(transformer_skip_layer_strategy, SkipLayerStrategy):
-                            transformer_skip_layer_strategy = SkipLayerStrategy.AttentionValues
+                    # CRITICAL: Ensure skip_layer_strategy is enum before passing to transformer
+                    transformer_skip_layer_strategy = ensure_enum(skip_layer_strategy)
                     
                     noise_pred = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
@@ -2055,26 +2021,9 @@ class LTXMultiScalePipeline:
                 raise ValueError(error_msg) from e
             raise
 
-        # CRITICAL: Before final call, ensure skip_layer_strategy is still an enum, not a string
-        # This can happen if *args contains something that overwrites it
+        # CRITICAL: Before final call, ensure skip_layer_strategy is enum, not string
         if "skip_layer_strategy" in kwargs:
-            if isinstance(kwargs["skip_layer_strategy"], str):
-                # Convert string back to enum if it got converted
-                str_val = kwargs["skip_layer_strategy"].lower()
-                if str_val in ["attentionskip", "attention_skip", "stg_as"]:
-                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionSkip
-                elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
-                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionValues
-                elif str_val in ["residual", "stg_r"]:
-                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.Residual
-                elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
-                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.TransformerBlock
-                else:
-                    # Default fallback
-                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionValues
-            elif not isinstance(kwargs["skip_layer_strategy"], SkipLayerStrategy):
-                # If it's not a string and not an enum, something is wrong - use default
-                kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionValues
+            kwargs["skip_layer_strategy"] = ensure_enum(kwargs["skip_layer_strategy"])
 
         result = self.video_pipeline(*args, **kwargs)
         if original_output_type != "latent":

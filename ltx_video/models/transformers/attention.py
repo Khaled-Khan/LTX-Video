@@ -20,7 +20,7 @@ from diffusers.utils.torch_utils import maybe_allow_in_graph
 from einops import rearrange
 from torch import nn
 
-from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
+from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy, ensure_enum
 
 try:
     from torch_xla.experimental.custom_kernel import flash_attention
@@ -309,6 +309,9 @@ class BasicTransformerBlock(nn.Module):
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.squeeze(1)
 
+        # CRITICAL: Ensure skip_layer_strategy is enum before comparison to prevent priority error
+        skip_layer_strategy = ensure_enum(skip_layer_strategy)
+        
         if (
             skip_layer_mask is not None
             and skip_layer_strategy == SkipLayerStrategy.TransformerBlock
@@ -1067,6 +1070,9 @@ class AttnProcessor2_0:
             batch_size, -1, attn.heads * head_dim
         )
         hidden_states_a = hidden_states_a.to(query.dtype)
+
+        # CRITICAL: Ensure skip_layer_strategy is enum before comparison to prevent priority error
+        skip_layer_strategy = ensure_enum(skip_layer_strategy)
 
         if (
             skip_layer_mask is not None
