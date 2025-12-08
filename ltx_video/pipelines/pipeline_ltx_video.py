@@ -793,26 +793,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         tone_map_compression_ratio: float = 0.0,
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
-        # CRITICAL: Validate skip_layer_strategy is an enum, not a string
-        # This prevents the 'str' object has no attribute 'priority' error
-        if skip_layer_strategy is not None:
-            if isinstance(skip_layer_strategy, str):
-                # Convert string to enum
-                str_val = skip_layer_strategy.lower()
-                if str_val in ["attentionskip", "attention_skip", "stg_as"]:
-                    skip_layer_strategy = SkipLayerStrategy.AttentionSkip
-                elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
-                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
-                elif str_val in ["residual", "stg_r"]:
-                    skip_layer_strategy = SkipLayerStrategy.Residual
-                elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
-                    skip_layer_strategy = SkipLayerStrategy.TransformerBlock
-                else:
-                    # Default fallback
-                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
-            elif not isinstance(skip_layer_strategy, SkipLayerStrategy):
-                # If it's not a string and not an enum, use default
-                skip_layer_strategy = SkipLayerStrategy.AttentionValues
         """
         Function invoked when calling the pipeline for generation.
 
@@ -901,6 +881,27 @@ class LTXVideoPipeline(DiffusionPipeline):
                 If `return_dict` is `True`, [`~pipelines.ImagePipelineOutput`] is returned, otherwise a `tuple` is
                 returned where the first element is a list with the generated images
         """
+        # CRITICAL: Validate skip_layer_strategy is an enum, not a string
+        # This prevents the 'str' object has no attribute 'priority' error
+        if skip_layer_strategy is not None:
+            if isinstance(skip_layer_strategy, str):
+                # Convert string to enum
+                str_val = skip_layer_strategy.lower()
+                if str_val in ["attentionskip", "attention_skip", "stg_as"]:
+                    skip_layer_strategy = SkipLayerStrategy.AttentionSkip
+                elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
+                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
+                elif str_val in ["residual", "stg_r"]:
+                    skip_layer_strategy = SkipLayerStrategy.Residual
+                elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
+                    skip_layer_strategy = SkipLayerStrategy.TransformerBlock
+                else:
+                    # Default fallback
+                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
+            elif not isinstance(skip_layer_strategy, SkipLayerStrategy):
+                # If it's not a string and not an enum, use default
+                skip_layer_strategy = SkipLayerStrategy.AttentionValues
+        
         if "mask_feature" in kwargs:
             deprecation_message = "The use of `mask_feature` is deprecated. It is no longer used in any computation and that doesn't affect the end results. It will be removed in a future version."
             deprecate("mask_feature", "1.0.0", deprecation_message, standard_warn=False)
@@ -1223,6 +1224,25 @@ class LTXVideoPipeline(DiffusionPipeline):
 
                 # predict noise model_output
                 with context_manager:
+                    # CRITICAL: Validate skip_layer_strategy before passing to transformer
+                    # This prevents 'str' object has no attribute 'priority' error
+                    transformer_skip_layer_strategy = skip_layer_strategy
+                    if transformer_skip_layer_strategy is not None:
+                        if isinstance(transformer_skip_layer_strategy, str):
+                            str_val = transformer_skip_layer_strategy.lower()
+                            if str_val in ["attentionskip", "attention_skip", "stg_as"]:
+                                transformer_skip_layer_strategy = SkipLayerStrategy.AttentionSkip
+                            elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
+                                transformer_skip_layer_strategy = SkipLayerStrategy.AttentionValues
+                            elif str_val in ["residual", "stg_r"]:
+                                transformer_skip_layer_strategy = SkipLayerStrategy.Residual
+                            elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
+                                transformer_skip_layer_strategy = SkipLayerStrategy.TransformerBlock
+                            else:
+                                transformer_skip_layer_strategy = SkipLayerStrategy.AttentionValues
+                        elif not isinstance(transformer_skip_layer_strategy, SkipLayerStrategy):
+                            transformer_skip_layer_strategy = SkipLayerStrategy.AttentionValues
+                    
                     noise_pred = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
                         indices_grid=fractional_coords,
@@ -1232,7 +1252,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                         encoder_attention_mask=prompt_attention_mask_batch[indices],
                         timestep=current_timestep,
                         skip_layer_mask=skip_layer_mask,
-                        skip_layer_strategy=skip_layer_strategy,
+                        skip_layer_strategy=transformer_skip_layer_strategy,
                         return_dict=False,
                     )[0]
 
