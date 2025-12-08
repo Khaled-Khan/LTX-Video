@@ -9,10 +9,16 @@ class SkipLayerStrategy(Enum):
     TransformerBlock = auto()
 
 
-def ensure_enum(value: Optional[Union[str, 'SkipLayerStrategy']]) -> Optional['SkipLayerStrategy']:
+def ensure_enum(value):
     """
     Ensure skip_layer_strategy is always an enum, never a string.
     This prevents 'str' object has no attribute 'priority' error.
+    
+    Args:
+        value: Optional string or SkipLayerStrategy enum
+        
+    Returns:
+        Optional SkipLayerStrategy enum (None if input was None)
     """
     if value is None:
         return None

@@ -19,7 +19,7 @@ from safetensors import safe_open
 
 
 from ltx_video.models.transformers.attention import BasicTransformerBlock
-from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
+from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy, ensure_enum
 
 from ltx_video.utils.diffusers_config_mapping import (
     diffusers_and_ours_config_mapping,
@@ -440,6 +440,9 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
             encoder_hidden_states = encoder_hidden_states.view(
                 batch_size, -1, hidden_states.shape[-1]
             )
+
+        # CRITICAL: Ensure skip_layer_strategy is enum before passing to blocks
+        skip_layer_strategy = ensure_enum(skip_layer_strategy)
 
         for block_idx, block in enumerate(self.transformer_blocks):
             if self.training and self.gradient_checkpointing:
