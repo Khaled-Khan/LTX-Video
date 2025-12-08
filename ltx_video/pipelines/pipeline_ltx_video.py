@@ -793,6 +793,26 @@ class LTXVideoPipeline(DiffusionPipeline):
         tone_map_compression_ratio: float = 0.0,
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
+        # CRITICAL: Validate skip_layer_strategy is an enum, not a string
+        # This prevents the 'str' object has no attribute 'priority' error
+        if skip_layer_strategy is not None:
+            if isinstance(skip_layer_strategy, str):
+                # Convert string to enum
+                str_val = skip_layer_strategy.lower()
+                if str_val in ["attentionskip", "attention_skip", "stg_as"]:
+                    skip_layer_strategy = SkipLayerStrategy.AttentionSkip
+                elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
+                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
+                elif str_val in ["residual", "stg_r"]:
+                    skip_layer_strategy = SkipLayerStrategy.Residual
+                elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
+                    skip_layer_strategy = SkipLayerStrategy.TransformerBlock
+                else:
+                    # Default fallback
+                    skip_layer_strategy = SkipLayerStrategy.AttentionValues
+            elif not isinstance(skip_layer_strategy, SkipLayerStrategy):
+                # If it's not a string and not an enum, use default
+                skip_layer_strategy = SkipLayerStrategy.AttentionValues
         """
         Function invoked when calling the pipeline for generation.
 
@@ -2014,6 +2034,27 @@ class LTXMultiScalePipeline:
                 error_msg += f"Traceback: {traceback.format_exc()}"
                 raise ValueError(error_msg) from e
             raise
+
+        # CRITICAL: Before final call, ensure skip_layer_strategy is still an enum, not a string
+        # This can happen if *args contains something that overwrites it
+        if "skip_layer_strategy" in kwargs:
+            if isinstance(kwargs["skip_layer_strategy"], str):
+                # Convert string back to enum if it got converted
+                str_val = kwargs["skip_layer_strategy"].lower()
+                if str_val in ["attentionskip", "attention_skip", "stg_as"]:
+                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionSkip
+                elif str_val in ["attentionvalues", "attention_values", "stg_av"]:
+                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionValues
+                elif str_val in ["residual", "stg_r"]:
+                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.Residual
+                elif str_val in ["transformerblock", "transformer_block", "stg_t"]:
+                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.TransformerBlock
+                else:
+                    # Default fallback
+                    kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionValues
+            elif not isinstance(kwargs["skip_layer_strategy"], SkipLayerStrategy):
+                # If it's not a string and not an enum, something is wrong - use default
+                kwargs["skip_layer_strategy"] = SkipLayerStrategy.AttentionValues
 
         result = self.video_pipeline(*args, **kwargs)
         if original_output_type != "latent":
