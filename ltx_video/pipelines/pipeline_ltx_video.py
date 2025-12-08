@@ -1867,6 +1867,9 @@ class LTXMultiScalePipeline:
         
         first_pass_clean = {}
         for k, v in first_pass.items():
+            # CRITICAL: Never include skip_layer_strategy in first_pass_clean - it must come from kwargs only
+            if k == "skip_layer_strategy":
+                continue
             # Only include valid parameters and ensure they're not strings (except for specific cases)
             if k in valid_params and v is not None:
                 # Convert strings to appropriate types if needed
@@ -1887,6 +1890,9 @@ class LTXMultiScalePipeline:
         
         second_pass_clean = {}
         for k, v in second_pass.items():
+            # CRITICAL: Never include skip_layer_strategy in second_pass_clean - it must come from kwargs only
+            if k == "skip_layer_strategy":
+                continue
             if k in valid_params and v is not None:
                 if isinstance(v, str):
                     if k in ["cfg_star_rescale", "stochastic_sampling"]:
@@ -1916,22 +1922,22 @@ class LTXMultiScalePipeline:
         kwargs["height"] = downscaled_height
         
         # CRITICAL: Ensure skip_layer_strategy is preserved if it exists in kwargs
-        # Don't let first_pass overwrite it
+        # Don't let first_pass overwrite it - ALWAYS skip skip_layer_strategy from first_pass
         skip_layer_strategy_backup = kwargs.get("skip_layer_strategy")
         
-        # Update with first_pass parameters, but exclude skip_layer_strategy if it's a string
+        # Update with first_pass parameters, but ALWAYS exclude skip_layer_strategy
         for k, v in first_pass_clean.items():
-            # Skip skip_layer_strategy if it's in kwargs already (preserve the enum, not a string)
-            if k == "skip_layer_strategy" and skip_layer_strategy_backup is not None:
+            # ALWAYS skip skip_layer_strategy from first_pass/second_pass - it should only come from kwargs
+            if k == "skip_layer_strategy":
                 continue
-            # Skip any parameter that might conflict with kwargs
-            if k in kwargs and isinstance(kwargs[k], type(v)) == False:
-                # If types don't match, preserve the original
+            # Skip any parameter that might conflict with kwargs (type mismatch)
+            if k in kwargs:
+                # If types don't match, preserve the original kwargs value
                 if not isinstance(v, type(kwargs[k])):
                     continue
             kwargs[k] = v
         
-        # Restore skip_layer_strategy if it was backed up
+        # Restore skip_layer_strategy if it was backed up (always preserve the enum from kwargs)
         if skip_layer_strategy_backup is not None:
             kwargs["skip_layer_strategy"] = skip_layer_strategy_backup
         
@@ -1970,21 +1976,22 @@ class LTXMultiScalePipeline:
         kwargs["height"] = downscaled_height * 2
         
         # CRITICAL: Ensure skip_layer_strategy is preserved if it exists in kwargs
+        # Don't let second_pass overwrite it - ALWAYS skip skip_layer_strategy from second_pass
         skip_layer_strategy_backup = kwargs.get("skip_layer_strategy")
         
-        # Update with second_pass parameters, but exclude skip_layer_strategy if it's a string
+        # Update with second_pass parameters, but ALWAYS exclude skip_layer_strategy
         for k, v in second_pass_clean.items():
-            # Skip skip_layer_strategy if it's in kwargs already (preserve the enum, not a string)
-            if k == "skip_layer_strategy" and skip_layer_strategy_backup is not None:
+            # ALWAYS skip skip_layer_strategy from first_pass/second_pass - it should only come from kwargs
+            if k == "skip_layer_strategy":
                 continue
-            # Skip any parameter that might conflict with kwargs
-            if k in kwargs and isinstance(kwargs[k], type(v)) == False:
-                # If types don't match, preserve the original
+            # Skip any parameter that might conflict with kwargs (type mismatch)
+            if k in kwargs:
+                # If types don't match, preserve the original kwargs value
                 if not isinstance(v, type(kwargs[k])):
                     continue
             kwargs[k] = v
         
-        # Restore skip_layer_strategy if it was backed up
+        # Restore skip_layer_strategy if it was backed up (always preserve the enum from kwargs)
         if skip_layer_strategy_backup is not None:
             kwargs["skip_layer_strategy"] = skip_layer_strategy_backup
         
