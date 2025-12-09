@@ -228,24 +228,35 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
 
         # Find the actual output file (inference.py creates unique filenames)
         import glob
+        import base64
+
         output_files = glob.glob("/tmp/outputs/*.mp4") + glob.glob("/tmp/outputs/*.png")
         if output_files:
             # Get most recent file
             actual_output = max(output_files, key=os.path.getmtime)
             file_size = os.path.getsize(actual_output)
-            print(f"[DEBUG] SUCCESS: Video saved to {actual_output} ({file_size} bytes)")
+            print(f"[DEBUG] Video saved to {actual_output} ({file_size} bytes)")
         else:
-            actual_output = output_path
-            print(f"[DEBUG] WARNING: No output files found in /tmp/outputs/")
+            return {
+                "status": "error",
+                "error": "No output file generated",
+                "error_type": "FileNotFoundError"
+            }
 
-        # Return success with output path
-        response = {
+        # Read video and encode as base64
+        with open(actual_output, "rb") as video_file:
+            video_base64 = base64.b64encode(video_file.read()).decode("utf-8")
+
+        print(f"[DEBUG] Returning base64 video ({len(video_base64)} chars)")
+
+        # Return success with base64 encoded video
+        return {
             "status": "success",
-            "output_path": actual_output,
+            "video_base64": video_base64,
+            "filename": os.path.basename(actual_output),
+            "file_size_bytes": file_size,
             "message": "Video generated successfully"
         }
-        print(f"[DEBUG] Returning response: {response}")
-        return response
 
     except Exception as e:
         import traceback
