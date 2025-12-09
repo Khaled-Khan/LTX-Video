@@ -225,15 +225,32 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         
         # Run inference
         infer(config)
-        
+
+        # Find the actual output file (inference.py creates unique filenames)
+        import glob
+        output_files = glob.glob("/tmp/outputs/*.mp4") + glob.glob("/tmp/outputs/*.png")
+        if output_files:
+            # Get most recent file
+            actual_output = max(output_files, key=os.path.getmtime)
+            file_size = os.path.getsize(actual_output)
+            print(f"[DEBUG] SUCCESS: Video saved to {actual_output} ({file_size} bytes)")
+        else:
+            actual_output = output_path
+            print(f"[DEBUG] WARNING: No output files found in /tmp/outputs/")
+
         # Return success with output path
-        return {
+        response = {
             "status": "success",
-            "output_path": output_path,
+            "output_path": actual_output,
             "message": "Video generated successfully"
         }
-        
+        print(f"[DEBUG] Returning response: {response}")
+        return response
+
     except Exception as e:
+        import traceback
+        print(f"[DEBUG] Error occurred: {type(e).__name__}: {e}")
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         return {
             "status": "error",
             "error": str(e),
