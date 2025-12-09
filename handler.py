@@ -25,6 +25,7 @@ os.makedirs("/tmp/outputs", exist_ok=True)
 os.makedirs("/tmp/imageio_temp", exist_ok=True)
 
 import runpod
+import base64
 from pathlib import Path
 from ltx_video.inference import infer, InferenceConfig
 from typing import Dict, Any
@@ -127,7 +128,7 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     {
         "input": {
             "prompt": "Your prompt here",
-            "conditioning_media_paths": ["path/to/image.jpg"],  # Optional
+            "conditioning_media_paths": ["data:image/jpeg;base64,..."],  # Optional: base64 image or file path on RunPod
             "conditioning_start_frames": [0],  # Optional
             "height": 512,
             "width": 512,
@@ -136,6 +137,10 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             "pipeline_config": "configs/ltxv-2b-0.9.8-distilled.yaml"
         }
     }
+    
+    For images, you can use:
+    - Base64: "data:image/jpeg;base64,iVBORw0KG..." (for local images)
+    - File path: "/path/to/image.jpg" (on RunPod server)
     """
     try:
         input_data = event.get("input", {})
@@ -150,6 +155,48 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         prompt = input_data["prompt"]
         conditioning_media_paths = input_data.get("conditioning_media_paths")
         conditioning_start_frames = input_data.get("conditioning_start_frames", [0] if conditioning_media_paths else None)
+        
+        # Handle base64 encoded images (for local images sent via API)
+        if conditioning_media_paths:
+            temp_image_dir = Path("/tmp/input_images")
+            temp_image_dir.mkdir(parents=True, exist_ok=True)
+            
+            processed_paths = []
+            for i, media in enumerate(conditioning_media_paths):
+                if isinstance(media, str):
+                    # Check if it's base64 encoded (starts with data:image or is long base64 string)
+                    if media.startswith("data:image") or (len(media) > 100 and not os.path.exists(media)):
+                        # Extract base64 data
+                        if media.startswith("data:image"):
+                            # Format: data:image/png;base64,iVBORw0KG...
+                            header, encoded = media.split(",", 1)
+                            ext = header.split("/")[1].split(";")[0]  # Extract extension
+                        else:
+                            # Assume it's raw base64, try to detect format
+                            encoded = media
+                            ext = "jpg"  # Default to jpg
+                        
+                        # Decode and save
+                        try:
+                            image_data = base64.b64decode(encoded)
+                            temp_path = temp_image_dir / f"input_image_{i}.{ext}"
+                            with open(temp_path, "wb") as f:
+                                f.write(image_data)
+                            processed_paths.append(str(temp_path))
+                            print(f"[DEBUG] Saved base64 image to {temp_path}")
+                        except Exception as e:
+                            return {
+                                "status": "error",
+                                "error": f"Failed to decode base64 image: {str(e)}",
+                                "error_type": "Base64DecodeError"
+                            }
+                    else:
+                        # It's a file path on RunPod server
+                        processed_paths.append(media)
+                else:
+                    processed_paths.append(media)
+            
+            conditioning_media_paths = processed_paths
         # Use smaller defaults to avoid GPU OOM (22GB GPU can't handle 512x512x121)
         height = input_data.get("height", 256)
         width = input_data.get("width", 256)
@@ -229,7 +276,6 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
 
         # Find the actual output file (inference.py creates unique filenames)
         import glob
-        import base64
 
         # Search for .mp4 and .png files in output directory
         output_files = glob.glob(str(output_dir / "*.mp4")) + glob.glob(str(output_dir / "*.png"))
