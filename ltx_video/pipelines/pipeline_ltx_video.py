@@ -1854,6 +1854,10 @@ class LTXMultiScalePipeline:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        # DEBUG: Log skip_layer_strategy type at entry
+        _sls = kwargs.get("skip_layer_strategy")
+        print(f"[DEBUG] MultiScale entry: skip_layer_strategy={type(_sls).__name__}")
+
         # Validate inputs
         if not isinstance(first_pass, dict):
             raise TypeError(f"first_pass must be a dict, got {type(first_pass)}")
@@ -1946,7 +1950,12 @@ class LTXMultiScalePipeline:
         # Restore skip_layer_strategy if it was backed up (always preserve the enum from kwargs)
         if skip_layer_strategy_backup is not None:
             kwargs["skip_layer_strategy"] = skip_layer_strategy_backup
-        
+
+        # CRITICAL: Ensure skip_layer_strategy is enum before first pass call
+        if "skip_layer_strategy" in kwargs:
+            kwargs["skip_layer_strategy"] = ensure_enum(kwargs["skip_layer_strategy"])
+            print(f"[DEBUG] First pass: skip_layer_strategy={type(kwargs['skip_layer_strategy']).__name__}")
+
         # Call pipeline without *args to avoid any positional argument issues
         try:
             result = self.video_pipeline(**kwargs)
@@ -2000,7 +2009,12 @@ class LTXMultiScalePipeline:
         # Restore skip_layer_strategy if it was backed up (always preserve the enum from kwargs)
         if skip_layer_strategy_backup is not None:
             kwargs["skip_layer_strategy"] = skip_layer_strategy_backup
-        
+
+        # CRITICAL: Ensure skip_layer_strategy is enum before second pass call
+        if "skip_layer_strategy" in kwargs:
+            kwargs["skip_layer_strategy"] = ensure_enum(kwargs["skip_layer_strategy"])
+            print(f"[DEBUG] Second pass: skip_layer_strategy={type(kwargs['skip_layer_strategy']).__name__}")
+
         # Call pipeline without *args to avoid any positional argument issues
         try:
             result = self.video_pipeline(**kwargs)
@@ -2024,6 +2038,7 @@ class LTXMultiScalePipeline:
         # CRITICAL: Before final call, ensure skip_layer_strategy is enum, not string
         if "skip_layer_strategy" in kwargs:
             kwargs["skip_layer_strategy"] = ensure_enum(kwargs["skip_layer_strategy"])
+            print(f"[DEBUG] Final pass: skip_layer_strategy={type(kwargs['skip_layer_strategy']).__name__}")
 
         result = self.video_pipeline(*args, **kwargs)
         if original_output_type != "latent":
