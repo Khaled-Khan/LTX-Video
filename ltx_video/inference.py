@@ -697,8 +697,8 @@ def infer(config: InferenceConfig):
                 dir=output_dir,
             )
 
-            # Write video
-            with imageio.get_writer(output_filename, fps=fps) as video:
+            # Write video using ffmpeg plugin explicitly
+            with imageio.get_writer(output_filename, fps=fps, format="FFMPEG") as video:
                 for frame in video_np:
                     video.append_data(frame)
 
