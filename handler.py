@@ -205,9 +205,10 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             }
         
         # Create output directory
+        # NOTE: inference.py treats output_path as a DIRECTORY, not a file
         output_dir = Path("/tmp/outputs")
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = str(output_dir / "output.mp4")
+        output_path = str(output_dir)  # Pass directory, not file path
         
         # Create inference config
         config = InferenceConfig(
@@ -230,7 +231,12 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         import glob
         import base64
 
-        output_files = glob.glob("/tmp/outputs/*.mp4") + glob.glob("/tmp/outputs/*.png")
+        # Search for .mp4 and .png files in output directory
+        output_files = glob.glob(str(output_dir / "*.mp4")) + glob.glob(str(output_dir / "*.png"))
+        
+        # Filter out directories
+        output_files = [f for f in output_files if os.path.isfile(f)]
+        
         if output_files:
             # Get most recent file
             actual_output = max(output_files, key=os.path.getmtime)
