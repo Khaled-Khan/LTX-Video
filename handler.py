@@ -15,6 +15,9 @@ os.environ.setdefault("TMPDIR", "/tmp")
 os.environ.setdefault("TMP", "/tmp")
 os.environ.setdefault("TEMP", "/tmp")
 
+# PyTorch CUDA memory management - reduce fragmentation
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+
 # ImageIO/FFmpeg temp directory (critical for video processing)
 os.environ.setdefault("IMAGEIO_TEMP_DIR", "/tmp/imageio_temp")
 os.environ.setdefault("IMAGEIO_FFMPEG_EXE", "")  # Let imageio find it, but use our temp dir
@@ -48,8 +51,15 @@ def get_disk_space(path: str) -> tuple:
     return free_gb, total_gb
 
 
-def cleanup_temp_files():
-    """Clean up temporary files to free space."""
+def cleanup_temp_files(protected_files=None):
+    """Clean up temporary files to free space.
+    
+    Args:
+        protected_files: List of file paths to protect from deletion
+    """
+    if protected_files is None:
+        protected_files = []
+    
     temp_dirs = [
         "/tmp/imageio_temp",
         "/tmp/outputs",
@@ -62,6 +72,9 @@ def cleanup_temp_files():
             try:
                 for item in os.listdir(temp_dir):
                     item_path = os.path.join(temp_dir, item)
+                    # Skip protected files
+                    if item_path in protected_files or any(item_path.endswith(prot) for prot in protected_files):
+                        continue
                     try:
                         if os.path.isfile(item_path):
                             size = os.path.getsize(item_path) / (1024 ** 2)  # MB
@@ -83,6 +96,57 @@ def cleanup_temp_files():
     if freed_mb > 0:
         print(f"[DEBUG] Freed {freed_mb:.2f} MB from temp files")
     
+    return freed_mb
+
+
+def aggressive_cleanup():
+    """Aggressively clean up all possible temp files and caches."""
+    freed_mb = 0.0
+    
+    # Clean temp files
+    freed_mb += cleanup_temp_files()
+    
+    # Clean HuggingFace cache (except text encoder)
+    freed_mb += cleanup_huggingface_cache()
+    
+    # Clean Python cache files
+    import glob
+    for cache_dir in ["/tmp/__pycache__", "/tmp/*.pyc", "/tmp/*.pyo"]:
+        for item in glob.glob(cache_dir):
+            try:
+                if os.path.isfile(item):
+                    size = os.path.getsize(item) / (1024 ** 2)
+                    os.remove(item)
+                    freed_mb += size
+                elif os.path.isdir(item):
+                    size = sum(
+                        os.path.getsize(os.path.join(dirpath, filename))
+                        for dirpath, dirnames, filenames in os.walk(item)
+                        for filename in filenames
+                    ) / (1024 ** 2)
+                    shutil.rmtree(item)
+                    freed_mb += size
+            except Exception:
+                continue
+    
+    # Clean system temp files older than 1 hour
+    try:
+        import time
+        current_time = time.time()
+        for root, dirs, files in os.walk("/tmp"):
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    if os.path.getmtime(file_path) < current_time - 3600:  # 1 hour old
+                        size = os.path.getsize(file_path) / (1024 ** 2)
+                        os.remove(file_path)
+                        freed_mb += size
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    
+    print(f"[DEBUG] Aggressive cleanup freed {freed_mb:.2f} MB ({freed_mb/1024:.2f} GB)")
     return freed_mb
 
 
@@ -161,6 +225,8 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         conditioning_start_frames = input_data.get("conditioning_start_frames", [0] if conditioning_media_paths else None)
         
         # Handle base64 encoded images (for local images sent via API)
+        # IMPORTANT: Save images FIRST before any cleanup
+        saved_image_paths = []  # Track saved images to protect from cleanup
         if conditioning_media_paths:
             temp_image_dir = Path("/tmp/input_images")
             temp_image_dir.mkdir(parents=True, exist_ok=True)
@@ -186,8 +252,16 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
                             temp_path = temp_image_dir / f"input_image_{i}.{ext}"
                             with open(temp_path, "wb") as f:
                                 f.write(image_data)
+                            # Verify file was saved
+                            if not temp_path.exists():
+                                return {
+                                    "status": "error",
+                                    "error": f"Failed to save image to {temp_path}",
+                                    "error_type": "FileSaveError"
+                                }
                             processed_paths.append(str(temp_path))
-                            print(f"[DEBUG] Saved base64 image to {temp_path}")
+                            saved_image_paths.append(str(temp_path))
+                            print(f"[DEBUG] Saved base64 image to {temp_path} ({len(image_data)} bytes)")
                         except Exception as e:
                             return {
                                 "status": "error",
@@ -231,15 +305,16 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             required_space = 22.0 if is_2b_model else 26.0  # 19GB text encoder + model + overhead
         
         # Always clean up temp files before processing to maximize available space
-        print(f"[DEBUG] Cleaning up temp files before processing...")
-        cleanup_temp_files()
+        # But protect the images we just saved
+        print(f"[DEBUG] Cleaning up temp files before processing (protecting {len(saved_image_paths)} input images)...")
+        cleanup_temp_files(protected_files=saved_image_paths)
         tmp_free, _ = get_disk_space("/tmp")
         
         # Aggressively clean up if space is still low
         if tmp_free < required_space:
-            print(f"[DEBUG] Low disk space ({tmp_free:.2f}GB free, need {required_space}GB). Cleaning up HuggingFace cache...")
-            # Clean up HuggingFace cache (models will be re-downloaded)
-            freed_mb = cleanup_huggingface_cache()
+            print(f"[DEBUG] Low disk space ({tmp_free:.2f}GB free, need {required_space}GB). Running aggressive cleanup...")
+            # Run aggressive cleanup
+            aggressive_cleanup()
             tmp_free, _ = get_disk_space("/tmp")
             print(f"[DEBUG] After cleanup: {tmp_free:.2f}GB free")
         
