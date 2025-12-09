@@ -53,6 +53,7 @@ def cleanup_temp_files():
     temp_dirs = [
         "/tmp/imageio_temp",
         "/tmp/outputs",
+        "/tmp/input_images",
     ]
     
     freed_mb = 0
@@ -78,6 +79,9 @@ def cleanup_temp_files():
                         continue
             except Exception:
                 continue
+    
+    if freed_mb > 0:
+        print(f"[DEBUG] Freed {freed_mb:.2f} MB from temp files")
     
     return freed_mb
 
@@ -220,19 +224,24 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         text_encoder_cached = text_encoder_cache.exists() and any(text_encoder_cache.rglob("*.safetensors"))
         
         if text_encoder_cached:
-            # Text encoder already cached, only need space for main model
-            required_space = 3.0 if is_2b_model else 7.0
+            # Text encoder already cached, only need space for main model + processing overhead
+            required_space = 5.0 if is_2b_model else 9.0  # Model + processing overhead
         else:
-            # Need to download text encoder (~19GB) + main model
+            # Need to download text encoder (~19GB) + main model + overhead
             required_space = 22.0 if is_2b_model else 26.0  # 19GB text encoder + model + overhead
         
-        # Aggressively clean up if space is low
+        # Always clean up temp files before processing to maximize available space
+        print(f"[DEBUG] Cleaning up temp files before processing...")
+        cleanup_temp_files()
+        tmp_free, _ = get_disk_space("/tmp")
+        
+        # Aggressively clean up if space is still low
         if tmp_free < required_space:
-            # Clean up temp files
-            freed_mb = cleanup_temp_files()
+            print(f"[DEBUG] Low disk space ({tmp_free:.2f}GB free, need {required_space}GB). Cleaning up HuggingFace cache...")
             # Clean up HuggingFace cache (models will be re-downloaded)
-            freed_mb += cleanup_huggingface_cache()
+            freed_mb = cleanup_huggingface_cache()
             tmp_free, _ = get_disk_space("/tmp")
+            print(f"[DEBUG] After cleanup: {tmp_free:.2f}GB free")
         
         # If still low on space, return error with diagnostics
         if tmp_free < required_space:
@@ -300,6 +309,18 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             video_base64 = base64.b64encode(video_file.read()).decode("utf-8")
 
         print(f"[DEBUG] Returning base64 video ({len(video_base64)} chars)")
+
+        # Clean up temp files after successful generation to free space for next request
+        print("[DEBUG] Cleaning up temp files after video generation...")
+        cleanup_temp_files()
+        # Clean up input images
+        temp_image_dir = Path("/tmp/input_images")
+        if temp_image_dir.exists():
+            try:
+                shutil.rmtree(temp_image_dir)
+                print(f"[DEBUG] Cleaned up input images directory")
+            except Exception as e:
+                print(f"[DEBUG] Warning: Could not clean input images: {e}")
 
         # Return success with base64 encoded video
         return {
