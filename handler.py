@@ -16,7 +16,7 @@ os.environ.setdefault("TMP", "/tmp")
 os.environ.setdefault("TEMP", "/tmp")
 
 # PyTorch CUDA memory management - reduce fragmentation
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:64")
 
 # ImageIO/FFmpeg temp directory (critical for video processing)
 os.environ.setdefault("IMAGEIO_TEMP_DIR", "/tmp/imageio_temp")
@@ -28,6 +28,7 @@ os.makedirs("/tmp/outputs", exist_ok=True)
 os.makedirs("/tmp/imageio_temp", exist_ok=True)
 
 import runpod
+from runpod.serverless.utils.rp_cleanup import clean
 import base64
 from pathlib import Path
 from ltx_video.inference import infer, InferenceConfig
@@ -401,14 +402,13 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         # Clean up temp files after successful generation to free space for next request
         print("[DEBUG] Cleaning up temp files after video generation...")
         cleanup_temp_files()
-        # Clean up input images
-        temp_image_dir = Path("/tmp/input_images")
-        if temp_image_dir.exists():
-            try:
-                shutil.rmtree(temp_image_dir)
-                print(f"[DEBUG] Cleaned up input images directory")
-            except Exception as e:
-                print(f"[DEBUG] Warning: Could not clean input images: {e}")
+        
+        # Use RunPod's clean() function for standard cleanup
+        try:
+            clean(folder_list=["/tmp/input_images", "/tmp/imageio_temp"])
+            print("[DEBUG] RunPod cleanup completed")
+        except Exception as e:
+            print(f"[DEBUG] Warning: RunPod cleanup error: {e}")
 
         # Return success with base64 encoded video
         return {
@@ -423,6 +423,15 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         import traceback
         print(f"[DEBUG] Error occurred: {type(e).__name__}: {e}")
         print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        
+        # Cleanup on error as well (per RunPod best practices)
+        try:
+            cleanup_temp_files()
+            clean(folder_list=["/tmp/input_images", "/tmp/imageio_temp"])
+            print("[DEBUG] Cleanup completed after error")
+        except Exception as cleanup_error:
+            print(f"[DEBUG] Warning: Cleanup error: {cleanup_error}")
+        
         return {
             "status": "error",
             "error": str(e),
