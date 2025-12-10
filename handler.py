@@ -341,6 +341,13 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = str(output_dir)  # Pass directory, not file path
         
+        # Get additional parameters
+        frame_rate = input_data.get("frame_rate", 30)
+        negative_prompt = input_data.get("negative_prompt", "worst quality, inconsistent motion, blurry, jittery, distorted")
+        guidance_scale = input_data.get("guidance_scale")
+        stg_scale = input_data.get("stg_scale")
+        rescaling_scale = input_data.get("rescaling_scale")
+        
         # Create inference config
         config = InferenceConfig(
             prompt=prompt,
@@ -349,11 +356,17 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             height=height,
             width=width,
             num_frames=num_frames,
+            frame_rate=frame_rate,
             seed=seed,
             pipeline_config=pipeline_config,
             output_path=output_path,
-            offload_to_cpu=offload_to_cpu
+            offload_to_cpu=offload_to_cpu,
+            negative_prompt=negative_prompt
         )
+        
+        # Store additional parameters for pipeline (will be passed via pipeline_config override if needed)
+        # Note: guidance_scale, stg_scale, rescaling_scale are typically set in the YAML config
+        # but can be overridden if needed in the future
         
         # Run inference
         infer(config)
