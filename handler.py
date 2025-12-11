@@ -15,8 +15,11 @@ os.environ.setdefault("TMPDIR", "/tmp")
 os.environ.setdefault("TMP", "/tmp")
 os.environ.setdefault("TEMP", "/tmp")
 
-# PyTorch CUDA memory management - reduce fragmentation
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:64")
+# PyTorch CUDA memory management - aggressive settings to reduce fragmentation
+# max_split_size_mb: Smaller chunks reduce fragmentation (32MB chunks)
+# expandable_segments:True: Allows segments to expand, reducing fragmentation
+# roundup_power2_divisions: Helps with memory alignment
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32,expandable_segments:True,roundup_power2_divisions:2")
 
 # ImageIO/FFmpeg temp directory (critical for video processing)
 os.environ.setdefault("IMAGEIO_TEMP_DIR", "/tmp/imageio_temp")
@@ -369,8 +372,28 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         # Note: guidance_scale, stg_scale, rescaling_scale are typically set in the YAML config
         # but can be overridden if needed in the future
         
+        # Clear GPU cache before inference to free up fragmented memory
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                print(f"[DEBUG] GPU cache cleared. Free memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        except Exception as e:
+            print(f"[DEBUG] Warning: Could not clear GPU cache: {e}")
+        
         # Run inference
         infer(config)
+        
+        # Clear GPU cache after inference to free memory for next job
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                print(f"[DEBUG] GPU cache cleared after inference")
+        except Exception as e:
+            print(f"[DEBUG] Warning: Could not clear GPU cache after inference: {e}")
 
         # Find the actual output file (inference.py creates unique filenames)
         import glob
