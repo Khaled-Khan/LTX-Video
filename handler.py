@@ -21,6 +21,9 @@ os.environ.setdefault("TEMP", "/tmp")
 # roundup_power2_divisions: Helps with memory alignment
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32,expandable_segments:True,roundup_power2_divisions:2")
 
+# CUDA error handling - make errors synchronous for better debugging
+os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
+
 # ImageIO/FFmpeg temp directory (critical for video processing)
 os.environ.setdefault("IMAGEIO_TEMP_DIR", "/tmp/imageio_temp")
 os.environ.setdefault("IMAGEIO_FFMPEG_EXE", "")  # Let imageio find it, but use our temp dir
@@ -222,15 +225,62 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     try:
         import torch
         import gc
-        if torch.cuda.is_available():
-            gc.collect()
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            torch.cuda.reset_peak_memory_stats()
-            initial_free = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
-            print(f"[DEBUG] Handler started. Initial GPU free memory: {initial_free / 1024**3:.2f} GB")
-            if initial_free < 5 * 1024**3:
-                print(f"[DEBUG] WARNING: Very low GPU memory at handler start! Only {initial_free / 1024**3:.2f} GB free")
+        
+        # Check if CUDA is available
+        if not torch.cuda.is_available():
+            return {
+                "status": "error",
+                "error": "CUDA is not available on this worker",
+                "error_type": "CUDAUnavailableError"
+            }
+        
+        # Check if device is accessible (not busy) - with retry
+        device = None
+        for retry in range(3):
+            try:
+                device = torch.cuda.current_device()
+                device_props = torch.cuda.get_device_properties(device)
+                print(f"[DEBUG] Using GPU device {device}: {device_props.name}")
+                break
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                if "busy" in error_msg or "unavailable" in error_msg:
+                    if retry < 2:
+                        print(f"[DEBUG] GPU busy, retrying in 1 second... (attempt {retry + 1}/3)")
+                        import time
+                        time.sleep(1)
+                        continue
+                    else:
+                        return {
+                            "status": "error",
+                            "error": f"GPU device is busy or unavailable after 3 retries. Worker may need restart. Error: {str(e)}",
+                            "error_type": "CUDABusyError",
+                            "suggestion": "Restart the RunPod worker or wait a few minutes and try again"
+                        }
+                raise
+        
+        # Clear GPU memory
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        
+        # Get memory info
+        initial_free = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
+        print(f"[DEBUG] Handler started. Initial GPU free memory: {initial_free / 1024**3:.2f} GB")
+        if initial_free < 5 * 1024**3:
+            print(f"[DEBUG] WARNING: Very low GPU memory at handler start! Only {initial_free / 1024**3:.2f} GB free")
+            
+    except RuntimeError as e:
+        error_msg = str(e).lower()
+        if "busy" in error_msg or "unavailable" in error_msg:
+            return {
+                "status": "error",
+                "error": f"GPU device is busy or unavailable: {str(e)}",
+                "error_type": "CUDABusyError",
+                "suggestion": "Restart the RunPod worker or wait a few minutes and try again"
+            }
+        raise
     except Exception as e:
         print(f"[DEBUG] Warning: Could not clear GPU at handler start: {e}")
     
@@ -393,17 +443,49 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         # but can be overridden if needed in the future
         
         # Clear GPU cache before inference to free up fragmented memory
+        # Also verify GPU is accessible before starting inference
         try:
             import torch
+            import gc
             if torch.cuda.is_available():
+                # Final check that GPU is accessible before inference
+                try:
+                    device = torch.cuda.current_device()
+                    torch.cuda.synchronize()  # This will fail if GPU is busy
+                    print(f"[DEBUG] GPU device {device} is accessible")
+                except RuntimeError as e:
+                    error_msg = str(e).lower()
+                    if "busy" in error_msg or "unavailable" in error_msg:
+                        return {
+                            "status": "error",
+                            "error": f"GPU device became busy/unavailable right before inference. Worker needs restart. Error: {str(e)}",
+                            "error_type": "CUDABusyError",
+                            "suggestion": "Restart the RunPod worker via web console (Edit endpoint → Save)"
+                        }
+                    raise
+                
+                # Clear memory
+                gc.collect()
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-                print(f"[DEBUG] GPU cache cleared. Free memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+                free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
+                print(f"[DEBUG] GPU cache cleared. Free memory: {free_memory / 1024**3:.2f} GB")
         except Exception as e:
             print(f"[DEBUG] Warning: Could not clear GPU cache: {e}")
         
-        # Run inference
-        infer(config)
+        # Run inference with error handling
+        try:
+            infer(config)
+        except RuntimeError as e:
+            error_msg = str(e).lower()
+            if "busy" in error_msg or "unavailable" in error_msg or "cuda error" in error_msg:
+                return {
+                    "status": "error",
+                    "error": f"GPU device error during inference: {str(e)}",
+                    "error_type": "CUDABusyError",
+                    "suggestion": "The GPU is stuck in a busy state. You MUST restart the RunPod worker via web console (Edit endpoint → Save) to clear the GPU state."
+                }
+            raise
         
         # Aggressively clear GPU cache after inference to free memory for next job
         try:
