@@ -287,7 +287,31 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     try:
         input_data = event.get("input", {})
         
-        # Validate required fields
+        # Handle cleanup-only requests FIRST (before prompt validation)
+        if input_data.get("cleanup_only") or input_data.get("cleanup"):
+            print("[DEBUG] Manual cleanup requested")
+            freed_mb = aggressive_cleanup()
+            # Also clean HuggingFace cache more aggressively (including snapshots)
+            hf_freed = cleanup_huggingface_cache(aggressive=True)
+            total_freed_gb = (freed_mb + hf_freed) / 1024
+            
+            # Get disk space after cleanup
+            tmp_free, tmp_total = get_disk_space("/tmp")
+            root_free, root_total = get_disk_space("/")
+            
+            return {
+                "status": "success",
+                "message": f"Cleanup completed. Freed {total_freed_gb:.2f} GB",
+                "freed_gb": round(total_freed_gb, 2),
+                "disk_space": {
+                    "tmp_free_gb": round(tmp_free, 2),
+                    "tmp_total_gb": round(tmp_total, 2),
+                    "root_free_gb": round(root_free, 2),
+                    "root_total_gb": round(root_total, 2)
+                }
+            }
+        
+        # Validate required fields (only if not cleanup request)
         if "prompt" not in input_data:
             return {
                 "error": "Missing required field: 'prompt'"
@@ -389,6 +413,9 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             print(f"[DEBUG] Low disk space ({tmp_free:.2f}GB free, need {required_space}GB). Running aggressive cleanup...")
             # Run aggressive cleanup
             aggressive_cleanup()
+            # Also aggressively clean HuggingFace cache (including snapshots)
+            hf_freed = cleanup_huggingface_cache(aggressive=True)
+            print(f"[DEBUG] Freed {hf_freed/1024:.2f} GB from HuggingFace cache")
             tmp_free, _ = get_disk_space("/tmp")
             print(f"[DEBUG] After cleanup: {tmp_free:.2f}GB free")
         
