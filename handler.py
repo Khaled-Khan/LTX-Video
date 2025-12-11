@@ -15,11 +15,11 @@ os.environ.setdefault("TMPDIR", "/tmp")
 os.environ.setdefault("TMP", "/tmp")
 os.environ.setdefault("TEMP", "/tmp")
 
-# PyTorch CUDA memory management - aggressive settings to reduce fragmentation
+# PyTorch CUDA memory management - conservative settings to reduce fragmentation
 # max_split_size_mb: Smaller chunks reduce fragmentation (32MB chunks)
-# expandable_segments:True: Allows segments to expand, reducing fragmentation
+# Note: expandable_segments can cause assertion failures in some PyTorch versions, so we disable it
 # roundup_power2_divisions: Helps with memory alignment
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32,expandable_segments:True,roundup_power2_divisions:2")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32,roundup_power2_divisions:2")
 
 # CUDA error handling - make errors synchronous for better debugging
 os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
