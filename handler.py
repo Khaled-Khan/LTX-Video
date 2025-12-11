@@ -196,6 +196,9 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     Serverless handler for LTX-Video inference
     
+    Note: GPU memory is cleared at the start of each handler call to ensure
+    clean state for each job.
+    
     Expected input:
     {
         "input": {
@@ -214,6 +217,23 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     - Base64: "data:image/jpeg;base64,iVBORw0KG..." (for local images)
     - File path: "/path/to/image.jpg" (on RunPod server)
     """
+    # CRITICAL: Clear GPU memory at the very start of handler
+    # This ensures we start with a clean slate, even if previous job didn't clean up
+    try:
+        import torch
+        import gc
+        if torch.cuda.is_available():
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
+            initial_free = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
+            print(f"[DEBUG] Handler started. Initial GPU free memory: {initial_free / 1024**3:.2f} GB")
+            if initial_free < 5 * 1024**3:
+                print(f"[DEBUG] WARNING: Very low GPU memory at handler start! Only {initial_free / 1024**3:.2f} GB free")
+    except Exception as e:
+        print(f"[DEBUG] Warning: Could not clear GPU at handler start: {e}")
+    
     try:
         input_data = event.get("input", {})
         
@@ -385,13 +405,20 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         # Run inference
         infer(config)
         
-        # Clear GPU cache after inference to free memory for next job
+        # Aggressively clear GPU cache after inference to free memory for next job
         try:
             import torch
+            import gc
             if torch.cuda.is_available():
+                # Force garbage collection
+                gc.collect()
+                # Clear all CUDA caches
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-                print(f"[DEBUG] GPU cache cleared after inference")
+                # Reset peak memory stats
+                torch.cuda.reset_peak_memory_stats()
+                free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
+                print(f"[DEBUG] GPU cache cleared after inference. Free memory: {free_memory / 1024**3:.2f} GB")
         except Exception as e:
             print(f"[DEBUG] Warning: Could not clear GPU cache after inference: {e}")
 
