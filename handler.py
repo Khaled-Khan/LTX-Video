@@ -422,11 +422,16 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         stg_scale = input_data.get("stg_scale")
         rescaling_scale = input_data.get("rescaling_scale")
         
+        # Conditioning parameters for better control
+        conditioning_strengths = input_data.get("conditioning_strengths")
+        image_cond_noise_scale = input_data.get("image_cond_noise_scale", 0.1)  # Lower = stronger conditioning (less variation)
+        
         # Create inference config
         config = InferenceConfig(
             prompt=prompt,
             conditioning_media_paths=conditioning_media_paths,
             conditioning_start_frames=conditioning_start_frames,
+            conditioning_strengths=conditioning_strengths,
             height=height,
             width=width,
             num_frames=num_frames,
@@ -435,7 +440,8 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             pipeline_config=pipeline_config,
             output_path=output_path,
             offload_to_cpu=offload_to_cpu,
-            negative_prompt=negative_prompt
+            negative_prompt=negative_prompt,
+            image_cond_noise_scale=image_cond_noise_scale
         )
         
         # Store additional parameters for pipeline (will be passed via pipeline_config override if needed)
