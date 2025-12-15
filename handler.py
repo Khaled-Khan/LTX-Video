@@ -435,7 +435,20 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         # Default to 2B model (smaller, requires less disk space)
         pipeline_config = input_data.get("pipeline_config", "configs/ltxv-2b-0.9.8-distilled.yaml")
         
-        # Check disk space before processing
+        # CRITICAL: Clean up FIRST before checking disk space
+        # This is essential for subsequent requests - clean up from previous runs
+        # But protect the images we just saved
+        print(f"[DEBUG] Cleaning up temp files before processing (protecting {len(saved_image_paths)} input images)...")
+        temp_freed = cleanup_temp_files(protected_files=saved_image_paths, keep_recent_outputs=0)  # Delete all old outputs
+        print(f"[DEBUG] Freed {temp_freed/1024:.2f} GB from temp files before processing")
+        
+        # Also clean HuggingFace cache snapshots (can free 10-20GB) before checking space
+        # IMPORTANT: This preserves the text encoder but cleans other cached models
+        hf_freed = cleanup_huggingface_cache(aggressive=True)
+        if hf_freed > 0:
+            print(f"[DEBUG] Freed {hf_freed/1024:.2f} GB from HuggingFace cache before processing")
+        
+        # NOW check disk space after cleanup
         tmp_free, tmp_total = get_disk_space("/tmp")
         root_free, root_total = get_disk_space("/")
         
@@ -444,30 +457,18 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         # So we need space for: main model + text encoder (if not cached) + processing overhead
         is_2b_model = "2b" in pipeline_config.lower()
         
-        # Check if text encoder is already cached
+        # Check if text encoder is already cached (AFTER cleanup, to see if it survived)
         text_encoder_cache = Path("/tmp/huggingface_cache/hub/models--PixArt-alpha--PixArt-XL-2-1024-MS")
         text_encoder_cached = text_encoder_cache.exists() and any(text_encoder_cache.rglob("*.safetensors"))
         
         if text_encoder_cached:
             # Text encoder already cached, only need space for main model + processing overhead
             required_space = 5.0 if is_2b_model else 9.0  # Model + processing overhead
+            print(f"[DEBUG] Text encoder is cached. Required space: {required_space}GB")
         else:
             # Need to download text encoder (~19GB) + main model + overhead
             required_space = 22.0 if is_2b_model else 26.0  # 19GB text encoder + model + overhead
-        
-        # Always clean up temp files BEFORE processing to maximize available space
-        # This is critical for subsequent requests - clean up from previous runs
-        # But protect the images we just saved
-        print(f"[DEBUG] Cleaning up temp files before processing (protecting {len(saved_image_paths)} input images)...")
-        temp_freed = cleanup_temp_files(protected_files=saved_image_paths, keep_recent_outputs=0)  # Delete all old outputs
-        print(f"[DEBUG] Freed {temp_freed/1024:.2f} GB from temp files before processing")
-        
-        # Also clean HuggingFace cache snapshots (can free 10-20GB) before checking space
-        hf_freed = cleanup_huggingface_cache(aggressive=True)
-        if hf_freed > 0:
-            print(f"[DEBUG] Freed {hf_freed/1024:.2f} GB from HuggingFace cache before processing")
-        
-        tmp_free, _ = get_disk_space("/tmp")
+            print(f"[DEBUG] Text encoder NOT cached. Required space: {required_space}GB")
         
         # Aggressively clean up if space is still low
         if tmp_free < required_space:
