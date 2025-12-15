@@ -58,11 +58,12 @@ def get_disk_space(path: str) -> tuple:
     return free_gb, total_gb
 
 
-def cleanup_temp_files(protected_files=None):
+def cleanup_temp_files(protected_files=None, keep_recent_outputs=1):
     """Clean up temporary files to free space.
     
     Args:
         protected_files: List of file paths to protect from deletion
+        keep_recent_outputs: Number of most recent output files to keep (default: 1)
     """
     if protected_files is None:
         protected_files = []
@@ -74,6 +75,29 @@ def cleanup_temp_files(protected_files=None):
     ]
     
     freed_mb = 0
+    
+    # Clean old output files (keep only the most recent ones)
+    output_dir = Path("/tmp/outputs")
+    if output_dir.exists() and keep_recent_outputs >= 0:
+        try:
+            import glob
+            output_files = glob.glob(str(output_dir / "*.mp4")) + glob.glob(str(output_dir / "*.png"))
+            output_files = [f for f in output_files if os.path.isfile(f)]
+            
+            if len(output_files) > keep_recent_outputs:
+                # Sort by modification time, keep most recent
+                output_files.sort(key=os.path.getmtime, reverse=True)
+                files_to_delete = output_files[keep_recent_outputs:]
+                for old_file in files_to_delete:
+                    try:
+                        size = os.path.getsize(old_file) / (1024 ** 2)  # MB
+                        os.remove(old_file)
+                        freed_mb += size
+                        print(f"[DEBUG] Deleted old output file: {os.path.basename(old_file)} ({size:.2f} MB)")
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"[DEBUG] Warning: Could not clean old output files: {e}")
     for temp_dir in temp_dirs:
         if os.path.exists(temp_dir):
             try:
@@ -431,10 +455,18 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             # Need to download text encoder (~19GB) + main model + overhead
             required_space = 22.0 if is_2b_model else 26.0  # 19GB text encoder + model + overhead
         
-        # Always clean up temp files before processing to maximize available space
+        # Always clean up temp files BEFORE processing to maximize available space
+        # This is critical for subsequent requests - clean up from previous runs
         # But protect the images we just saved
         print(f"[DEBUG] Cleaning up temp files before processing (protecting {len(saved_image_paths)} input images)...")
-        cleanup_temp_files(protected_files=saved_image_paths)
+        temp_freed = cleanup_temp_files(protected_files=saved_image_paths, keep_recent_outputs=0)  # Delete all old outputs
+        print(f"[DEBUG] Freed {temp_freed/1024:.2f} GB from temp files before processing")
+        
+        # Also clean HuggingFace cache snapshots (can free 10-20GB) before checking space
+        hf_freed = cleanup_huggingface_cache(aggressive=True)
+        if hf_freed > 0:
+            print(f"[DEBUG] Freed {hf_freed/1024:.2f} GB from HuggingFace cache before processing")
+        
         tmp_free, _ = get_disk_space("/tmp")
         
         # Aggressively clean up if space is still low
@@ -593,9 +625,15 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
 
         print(f"[DEBUG] Returning base64 video ({len(video_base64)} chars)")
 
-        # Clean up temp files after successful generation to free space for next request
-        print("[DEBUG] Cleaning up temp files after video generation...")
-        cleanup_temp_files()
+        # Aggressively clean up after successful generation to free space for next request
+        print("[DEBUG] Cleaning up temp files and caches after video generation...")
+        # Clean temp files and old output videos (keep only the most recent one)
+        temp_freed = cleanup_temp_files(keep_recent_outputs=1)
+        
+        # Aggressively clean HuggingFace cache (but preserve text encoder for faster next run)
+        # This is critical to free space for subsequent requests
+        hf_freed = cleanup_huggingface_cache(aggressive=True)
+        print(f"[DEBUG] Freed {temp_freed/1024:.2f} GB from temp files, {hf_freed/1024:.2f} GB from HuggingFace cache")
         
         # Use RunPod's clean() function for standard cleanup
         try:
@@ -603,6 +641,10 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             print("[DEBUG] RunPod cleanup completed")
         except Exception as e:
             print(f"[DEBUG] Warning: RunPod cleanup error: {e}")
+        
+        # Report final disk space after cleanup
+        tmp_free, tmp_total = get_disk_space("/tmp")
+        print(f"[DEBUG] Disk space after cleanup: {tmp_free:.2f}GB free / {tmp_total:.2f}GB total")
 
         # Return success with base64 encoded video
         return {
@@ -618,11 +660,12 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[DEBUG] Error occurred: {type(e).__name__}: {e}")
         print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         
-        # Cleanup on error as well (per RunPod best practices)
+        # Aggressively cleanup on error as well (per RunPod best practices)
         try:
-            cleanup_temp_files()
+            temp_freed = cleanup_temp_files()
+            hf_freed = cleanup_huggingface_cache(aggressive=True)
             clean(folder_list=["/tmp/input_images", "/tmp/imageio_temp"])
-            print("[DEBUG] Cleanup completed after error")
+            print(f"[DEBUG] Cleanup completed after error. Freed {temp_freed/1024:.2f} GB from temp files, {hf_freed/1024:.2f} GB from HuggingFace cache")
         except Exception as cleanup_error:
             print(f"[DEBUG] Warning: Cleanup error: {cleanup_error}")
         
