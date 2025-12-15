@@ -157,8 +157,12 @@ def aggressive_cleanup():
     return freed_mb
 
 
-def cleanup_huggingface_cache():
-    """Aggressively clean up HuggingFace cache to free space, but preserve text encoder."""
+def cleanup_huggingface_cache(aggressive=False):
+    """Clean up HuggingFace cache to free space, but preserve text encoder.
+    
+    Args:
+        aggressive: If True, also clean snapshots directory (can free 10-20GB)
+    """
     cache_dir = Path("/tmp/huggingface_cache")
     hub_dir = cache_dir / "hub"
     
@@ -191,6 +195,31 @@ def cleanup_huggingface_cache():
                 continue
     except Exception:
         pass
+    
+    # Aggressive cleanup: also clean snapshots directory (can free 10-20GB)
+    if aggressive:
+        snapshots_dir = cache_dir / "hub" / "snapshots"
+        if snapshots_dir.exists():
+            try:
+                for item in snapshots_dir.iterdir():
+                    try:
+                        if item.is_dir():
+                            # Skip text encoder snapshots - preserve them
+                            if text_encoder_pattern in str(item):
+                                continue
+                            
+                            # Calculate size
+                            size = sum(
+                                os.path.getsize(os.path.join(dirpath, filename))
+                                for dirpath, dirnames, filenames in os.walk(item)
+                                for filename in filenames
+                            ) / (1024 ** 2)  # MB
+                            shutil.rmtree(item)
+                            freed_mb += size
+                    except Exception:
+                        continue
+            except Exception:
+                pass
     
     return freed_mb
 
