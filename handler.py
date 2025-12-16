@@ -515,6 +515,47 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         conditioning_strengths = input_data.get("conditioning_strengths")
         image_cond_noise_scale = input_data.get("image_cond_noise_scale", 0.1)  # Lower = stronger conditioning (less variation)
         
+        # Override pipeline config parameters if provided by user
+        # Load YAML, modify first_pass/second_pass, save to temp file
+        if guidance_scale is not None or stg_scale is not None or rescaling_scale is not None:
+            import yaml
+            import tempfile
+            
+            # Load the original YAML config
+            config_path = Path(pipeline_config)
+            if not config_path.is_absolute():
+                # Try relative to current directory or workspace root
+                config_path = Path(__file__).parent / pipeline_config
+                if not config_path.exists():
+                    config_path = Path("/workspace") / pipeline_config
+            
+            with open(config_path, 'r') as f:
+                config_dict = yaml.safe_load(f)
+            
+            # Override first_pass and second_pass if they exist
+            if "first_pass" in config_dict and isinstance(config_dict["first_pass"], dict):
+                if guidance_scale is not None:
+                    config_dict["first_pass"]["guidance_scale"] = float(guidance_scale)
+                if stg_scale is not None:
+                    config_dict["first_pass"]["stg_scale"] = float(stg_scale)
+                if rescaling_scale is not None:
+                    config_dict["first_pass"]["rescaling_scale"] = float(rescaling_scale)
+            
+            if "second_pass" in config_dict and isinstance(config_dict["second_pass"], dict):
+                if guidance_scale is not None:
+                    config_dict["second_pass"]["guidance_scale"] = float(guidance_scale)
+                if stg_scale is not None:
+                    config_dict["second_pass"]["stg_scale"] = float(stg_scale)
+                if rescaling_scale is not None:
+                    config_dict["second_pass"]["rescaling_scale"] = float(rescaling_scale)
+            
+            # Save to temp file
+            temp_config_file = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, dir="/tmp")
+            yaml.dump(config_dict, temp_config_file, default_flow_style=False)
+            temp_config_file.close()
+            pipeline_config = temp_config_file.name
+            print(f"[DEBUG] Overrode pipeline config parameters. Using temp config: {pipeline_config}")
+        
         # Create inference config
         config = InferenceConfig(
             prompt=prompt,
@@ -532,10 +573,6 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
             negative_prompt=negative_prompt,
             image_cond_noise_scale=image_cond_noise_scale
         )
-        
-        # Store additional parameters for pipeline (will be passed via pipeline_config override if needed)
-        # Note: guidance_scale, stg_scale, rescaling_scale are typically set in the YAML config
-        # but can be overridden if needed in the future
         
         # Clear GPU cache before inference to free up fragmented memory
         # Also verify GPU is accessible before starting inference
